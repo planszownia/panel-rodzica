@@ -1,0 +1,1546 @@
+/* =========================================================
+   PLANSZOWNIA – PROFESJONALNY PROFIL GRACZA
+   Ultimate Member
+   ========================================================= */
+
+/* GŁÓWNY PROFIL */
+.um-profile {
+    max-width: 1050px !important;
+    margin: 35px auto 60px !important;
+    background: #fff !important;
+    border-radius: 18px !important;
+    overflow: hidden !important;
+    box-shadow: 0 10px 35px rgba(0,0,0,.12) !important;
+}
+
+/* =========================================================
+   NAGŁÓWEK PROFILU – CIEMNY PANEL
+   ========================================================= */
+
+.um-profile-header {
+    background: linear-gradient(135deg, #11131c 0%, #20232e 100%) !important;
+    min-height: 245px !important;
+    position: relative !important;
+    padding: 35px 40px 0 !important;
+}
+
+/* delikatny pomarańczowy akcent */
+.um-profile-header:after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 5px;
+    background: #e87524;
+}
+
+/* =========================================================
+   AVATAR
+   ========================================================= */
+
+.um-profile-photo {
+    position: relative !important;
+    z-index: 5 !important;
+    padding-top: 20px !important;
+    text-align: center !important;
+}
+
+.um-profile-photo img {
+    width: 155px !important;
+    height: 155px !important;
+    object-fit: cover !important;
+    border-radius: 50% !important;
+
+    border: 7px solid #fff !important;
+
+    box-shadow:
+        0 5px 25px rgba(0,0,0,.30),
+        0 0 0 4px rgba(232,117,36,.85) !important;
+}
+
+/* =========================================================
+   NAZWA GRACZA
+   ========================================================= */
+
+.um-profile-name {
+    text-align: center !important;
+    color: #fff !important;
+    font-size: 28px !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    letter-spacing: .8px !important;
+    margin-top: 12px !important;
+}
+
+/* =========================================================
+   MENU PROFILU
+   ========================================================= */
+
+.um-profile-nav {
+    position: relative !important;
+    z-index: 10 !important;
+
+    background: #151720 !important;
+
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+
+    gap: 8px !important;
+    padding: 10px !important;
+
+    border-radius: 0 !important;
+}
+
+/* przyciski */
+.um-profile-nav-item a {
+    color: #dcdde1 !important;
+    background: transparent !important;
+
+    padding: 12px 24px !important;
+    border-radius: 8px !important;
+
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: .3px !important;
+
+    transition: all .2s ease !important;
+}
+
+/* aktywna */
+.um-profile-nav-item.active a {
+    background: #e87524 !important;
+    color: #fff !important;
+
+    box-shadow: 0 3px 10px rgba(232,117,36,.30) !important;
+}
+
+/* hover */
+.um-profile-nav-item a:hover {
+    background: #e87524 !important;
+    color: #fff !important;
+}
+
+/* =========================================================
+   TREŚĆ PROFILU
+   ========================================================= */
+
+.um-profile-body {
+    background: #fff !important;
+    padding: 35px 55px 50px !important;
+}
+
+/* =========================================================
+   INFORMACJE – KARTY
+   ========================================================= */
+
+.um-profile .um-field {
+    background: #fafafa !important;
+
+    border: 1px solid #e9e9e9 !important;
+    border-left: 4px solid #e87524 !important;
+
+    border-radius: 10px !important;
+
+    padding: 15px 20px !important;
+    margin-bottom: 12px !important;
+
+    box-shadow: 0 2px 7px rgba(0,0,0,.035) !important;
+
+    transition: all .2s ease !important;
+}
+
+.um-profile .um-field:hover {
+    background: #fff !important;
+
+    transform: translateX(3px);
+
+    box-shadow: 0 5px 15px rgba(0,0,0,.07) !important;
+}
+
+/* nazwa pola */
+.um-profile .um-field-label {
+    color: #888 !important;
+
+    font-size: 10px !important;
+    font-weight: 800 !important;
+
+    text-transform: uppercase !important;
+    letter-spacing: .8px !important;
+
+    margin-bottom: 5px !important;
+}
+
+/* wartość */
+.um-profile .um-field-value {
+    color: #20222a !important;
+
+    font-size: 16px !important;
+    font-weight: 600 !important;
+}
+
+/* =========================================================
+   IKONY / ELEMENTY AKCENTOWE
+   ========================================================= */
+
+.um-profile .um-field-icon {
+    color: #e87524 !important;
+}
+
+/* =========================================================
+   MENU ZĘBATKI
+   ========================================================= */
+
+.um-profile .um-dropdown-trigger {
+    background: #e87524 !important;
+    color: #fff !important;
+
+    width: 48px !important;
+    height: 48px !important;
+
+    border-radius: 10px !important;
+
+    box-shadow: 0 4px 12px rgba(0,0,0,.15) !important;
+}
+
+.um-profile .um-dropdown-trigger:hover {
+    background: #c95f16 !important;
+}
+
+/* rozwijane menu */
+.um-profile .um-dropdown {
+    border-radius: 10px !important;
+    overflow: hidden !important;
+
+    border: 1px solid #e5e5e5 !important;
+
+    box-shadow: 0 10px 30px rgba(0,0,0,.15) !important;
+}
+
+.um-profile .um-dropdown li a {
+    padding: 12px 16px !important;
+    color: #333 !important;
+    font-size: 13px !important;
+}
+
+.um-profile .um-dropdown li a:hover {
+    background: #f7f7f7 !important;
+    color: #e87524 !important;
+}
+
+/* =========================================================
+   RESPONSIVE – TELEFON
+   ========================================================= */
+
+@media (max-width: 700px) {
+
+    .um-profile {
+        margin: 15px 8px 30px !important;
+        border-radius: 14px !important;
+    }
+
+    .um-profile-header {
+        min-height: 205px !important;
+        padding: 20px 15px 0 !important;
+    }
+
+    .um-profile-photo {
+        padding-top: 15px !important;
+    }
+
+    .um-profile-photo img {
+        width: 115px !important;
+        height: 115px !important;
+        border-width: 5px !important;
+    }
+
+    .um-profile-name {
+        font-size: 21px !important;
+    }
+
+    .um-profile-nav {
+        flex-wrap: wrap !important;
+        gap: 4px !important;
+    }
+
+    .um-profile-nav-item a {
+        padding: 9px 12px !important;
+        font-size: 11px !important;
+    }
+
+    .um-profile-body {
+        padding: 22px 14px 30px !important;
+    }
+
+    .um-profile .um-field {
+        padding: 12px 14px !important;
+    }
+
+    .um-profile .um-field-value {
+        font-size: 14px !important;
+    }
+}
+
+/* =========================================================
+   PLANSZOWNIA – PROFESJONALNE „MOJE KONTO”
+   ========================================================= */
+
+/* Główne tło strony */
+.um-page-account,
+.um-account {
+    font-family: inherit;
+}
+
+/* Główna karta konta */
+.um-account {
+    max-width: 1180px;
+    margin: 45px auto 70px;
+    padding: 0;
+    background: #fff;
+    border-radius: 22px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.10);
+    overflow: hidden;
+}
+
+/* Lewy panel */
+.um-account-side {
+    background: #111116 !important;
+    padding: 35px 22px !important;
+}
+
+/* Avatar w panelu */
+.um-account-side .um-profile-photo {
+    margin-bottom: 15px;
+}
+
+.um-account-side .um-profile-photo img {
+    border-radius: 50%;
+    border: 4px solid #fff;
+    box-shadow: 0 6px 18px rgba(0,0,0,.25);
+}
+
+/* Nazwa użytkownika */
+.um-account-side .um-account-name {
+    color: #fff !important;
+    font-size: 21px !important;
+    font-weight: 800 !important;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+/* „Pokaż profil” */
+.um-account-side .um-account-profile-link {
+    color: #d86f3d !important;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+/* Menu konta */
+.um-account-side .um-account-link {
+    border-radius: 12px !important;
+    margin: 5px 0 !important;
+    padding: 13px 15px !important;
+    transition: all .2s ease;
+}
+
+/* Aktywna pozycja */
+.um-account-side .um-account-link.current {
+    background: #d86f3d !important;
+    color: #fff !important;
+}
+
+/* Hover */
+.um-account-side .um-account-link:hover {
+    background: rgba(216,111,61,.18) !important;
+    color: #fff !important;
+}
+
+/* Prawa część */
+.um-account-main {
+    background: #fff;
+    padding: 45px 50px !important;
+}
+
+/* Nagłówek sekcji */
+.um-account-main h3 {
+    font-size: 26px !important;
+    font-weight: 800 !important;
+    color: #17171b !important;
+    margin-bottom: 30px !important;
+    padding-bottom: 16px;
+    border-bottom: 2px solid #eee;
+}
+
+/* Pola formularza */
+.um-account-main .um-field-area input,
+.um-account-main .um-field-area textarea,
+.um-account-main .um-field-area select {
+    border: 1px solid #dedede !important;
+    border-radius: 11px !important;
+    background: #fafafa !important;
+    min-height: 48px;
+    padding: 12px 15px !important;
+    font-size: 15px !important;
+    transition: all .2s ease;
+}
+
+/* Pole aktywne */
+.um-account-main .um-field-area input:focus,
+.um-account-main .um-field-area textarea:focus,
+.um-account-main .um-field-area select:focus {
+    border-color: #d86f3d !important;
+    background: #fff !important;
+    box-shadow: 0 0 0 3px rgba(216,111,61,.12) !important;
+    outline: none !important;
+}
+
+/* Etykiety */
+.um-account-main .um-field-label label {
+    color: #333 !important;
+    font-weight: 700 !important;
+    font-size: 14px !important;
+}
+
+/* Przycisk aktualizacji */
+.um-account-main .um-button {
+    background: #d86f3d !important;
+    border: none !important;
+    border-radius: 11px !important;
+    padding: 13px 25px !important;
+    font-weight: 800 !important;
+    font-size: 15px !important;
+    box-shadow: 0 5px 15px rgba(216,111,61,.25);
+    transition: all .2s ease;
+}
+
+/* Hover przycisku */
+.um-account-main .um-button:hover {
+    background: #bd5d30 !important;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(216,111,61,.32);
+}
+
+/* Ikony menu */
+.um-account-side i {
+    color: inherit !important;
+}
+
+/* Sekcja hasła */
+.um-account-main .um-field-password {
+    margin-top: 15px;
+}
+
+/* Sekcja prywatności */
+.um-account-main .um-field-block {
+    color: #555;
+}
+
+/* Usuwanie konta – delikatnie wyróżnione */
+.um-account-main .um-account-delete {
+    color: #b33a3a !important;
+}
+
+/* =========================================================
+   TELEFON
+   ========================================================= */
+
+@media (max-width: 767px) {
+
+    .um-account {
+        margin: 20px 12px 40px;
+        border-radius: 16px;
+    }
+
+    .um-account-side {
+        padding: 22px 15px !important;
+    }
+
+    .um-account-main {
+        padding: 28px 20px !important;
+    }
+
+    .um-account-main h3 {
+        font-size: 22px !important;
+    }
+
+    .um-account-side .um-account-link {
+        padding: 11px 12px !important;
+    }
+}
+
+/* =========================================
+   MENU „MOJE KONTO” – CZYTELNOŚĆ
+   ========================================= */
+
+/* Wszystkie pozycje menu */
+.um-account-side .um-account-link {
+    color: #17233f !important;
+    font-weight: 700 !important;
+}
+
+/* Ikony */
+.um-account-side .um-account-link i,
+.um-account-side .um-account-link .um-account-icon {
+    color: #17233f !important;
+}
+
+/* AKTYWNA POZYCJA – pomarańczowe tło + granatowy tekst */
+.um-account-side .um-account-link.current,
+.um-account-side .um-account-link.current:hover {
+    background: #d86f3d !important;
+    color: #17233f !important;
+}
+
+.um-account-side .um-account-link.current i,
+.um-account-side .um-account-link.current .um-account-icon {
+    color: #17233f !important;
+}
+
+/* Strzałka aktywnej pozycji */
+.um-account-side .um-account-link.current:after {
+    color: #17233f !important;
+}
+
+/* Hover pozostałych pozycji */
+.um-account-side .um-account-link:hover {
+    background: #f3eee9 !important;
+    color: #17233f !important;
+}
+
+/* =========================================
+   „POKAŻ PROFIL” → „PROFIL GRACZA”
+   ========================================= */
+
+.um-account-side .um-account-profile-link {
+    font-size: 0 !important;
+    color: #d86f3d !important;
+}
+
+.um-account-side .um-account-profile-link:after {
+    content: "Profil gracza";
+    font-size: 15px;
+    font-weight: 800;
+    color: #d86f3d;
+}
+
+/* =========================================
+   MOJE KONTO – POPRAWKI
+   ========================================= */
+
+/* Przywrócenie tylko „Pokaż profil” */
+.um-account-side .um-account-profile-link {
+    font-size: 15px !important;
+    color: #d86f3d !important;
+    font-weight: 800 !important;
+}
+
+.um-account-side .um-account-profile-link:after {
+    content: none !important;
+}
+
+
+/* =========================================
+   PRYWATNOŚĆ – SPÓJNY WYGLĄD
+   ========================================= */
+
+.um-account-main .um-field-label label {
+    color: #17233f !important;
+    font-weight: 800 !important;
+}
+
+/* Pola wyboru */
+.um-account-main select {
+    border: 1px solid #d9d9d9 !important;
+    border-radius: 10px !important;
+    background: #fff !important;
+    color: #17233f !important;
+    font-weight: 600 !important;
+}
+
+/* Teksty opisowe */
+.um-account-main .um-field-block,
+.um-account-main .um-field-area {
+    color: #17233f;
+}
+
+/* Przyciski prywatności */
+.um-account-main input[type="submit"],
+.um-account-main button {
+    background: #d86f3d !important;
+    color: #17233f !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 800 !important;
+}
+
+/* Aktywna zakładka */
+.um-account-side .um-account-link.current {
+    background: #d86f3d !important;
+    color: #17233f !important;
+}
+
+.um-account-side .um-account-link.current i,
+.um-account-side .um-account-link.current .um-account-icon {
+    color: #17233f !important;
+}
+
+/* =========================================
+   PLANSZOWNIA – KOLEJNOŚĆ ZAKŁADEK PROFILU
+   ========================================= */
+
+.um-profile .um-profile-nav {
+    display: flex !important;
+}
+
+/* Informacje */
+.um-profile .um-profile-nav .um-profile-nav-main {
+    order: 1 !important;
+}
+
+/* Wiadomości */
+.um-profile .um-profile-nav .um-profile-nav-messages {
+    order: 2 !important;
+}
+
+/* Rodzic */
+.um-profile .um-profile-nav .um-profile-nav-rodzic {
+    order: 3 !important;
+}
+
+/* Konto */
+.um-profile .um-profile-nav .um-profile-nav-konto {
+    order: 4 !important;
+}
+/* =========================================================
+   PLANSZOWNIA – NOWE ZAKŁADKI PROFILU
+   RODZIC + KONTO
+   ========================================================= */
+
+/* RODZIC + KONTO – normalny wygląd */
+.um-profile .um-profile-nav .um-profile-nav-rodzic a,
+.um-profile .um-profile-nav .um-profile-nav-konto a {
+    color: #ffffff !important;
+}
+
+
+/* NIEBIESKA AKTYWNA ZAKŁADKA */
+.um-profile .um-profile-nav .um-profile-nav-rodzic.active a,
+.um-profile .um-profile-nav .um-profile-nav-konto.active a {
+    background: #1976d2 !important;
+    color: #ffffff !important;
+    box-shadow: 0 3px 10px rgba(25,118,210,.35) !important;
+}
+
+
+/* NIEBIESKI HOVER */
+.um-profile .um-profile-nav .um-profile-nav-rodzic a:hover,
+.um-profile .um-profile-nav .um-profile-nav-konto a:hover {
+    background: #1976d2 !important;
+    color: #ffffff !important;
+}
+
+
+/* TEKST */
+.um-profile .um-profile-nav .um-profile-nav-rodzic span,
+.um-profile .um-profile-nav .um-profile-nav-konto span {
+    color: inherit !important;
+}
+
+
+/* IKONY */
+.um-profile .um-profile-nav .um-profile-nav-rodzic i,
+.um-profile .um-profile-nav .um-profile-nav-konto i {
+    color: inherit !important;
+}
+
+
+/* =========================================================
+   ZAWARTOŚĆ ZAKŁADKI KONTO
+   ========================================================= */
+
+.um-profile .planszownia-konto-tab {
+    max-width: 700px !important;
+    margin: 0 auto !important;
+}
+
+
+/* Nagłówek Konto */
+.um-profile .planszownia-konto-title {
+    color: #555 !important;
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    margin-bottom: 25px !important;
+}
+
+
+/* Pola */
+.um-profile .planszownia-konto-field {
+    margin-bottom: 16px !important;
+}
+
+
+/* Etykiety */
+.um-profile .planszownia-konto-field label {
+    display: block !important;
+    color: #666 !important;
+    font-size: 12px !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    margin-bottom: 7px !important;
+}
+
+
+/* Inputy */
+.um-profile .planszownia-konto-field input {
+    width: 100% !important;
+    min-height: 48px !important;
+    box-sizing: border-box !important;
+    padding: 12px 14px !important;
+    border: 1px solid #e1e1e1 !important;
+    border-radius: 9px !important;
+    background: #fafafa !important;
+}
+
+
+/* Pole zablokowane */
+.um-profile .planszownia-konto-field input:disabled {
+    background: #f5f5f5 !important;
+    color: #aaa !important;
+}
+
+
+/* Aktywne pole */
+.um-profile .planszownia-konto-field input:focus {
+    border-color: #1976d2 !important;
+    background: #fff !important;
+    box-shadow: 0 0 0 3px rgba(25,118,210,.10) !important;
+    outline: none !important;
+}
+
+
+/* Przycisk */
+.um-profile .planszownia-konto-button .um-button {
+    background: #1976d2 !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 9px !important;
+    padding: 13px 24px !important;
+    font-weight: 800 !important;
+    box-shadow: 0 4px 12px rgba(25,118,210,.25) !important;
+}
+
+
+/* Hover przycisku */
+.um-profile .planszownia-konto-button .um-button:hover {
+    background: #1565c0 !important;
+    color: #fff !important;
+}
+
+
+/* =========================================================
+   KOMUNIKATY
+   ========================================================= */
+
+.um-profile .planszownia-konto-success {
+    max-width: 700px !important;
+    margin: 0 auto 20px !important;
+    padding: 12px 15px !important;
+    border-radius: 8px !important;
+    background: #e8f5e9 !important;
+    color: #2e7d32 !important;
+    font-weight: 700 !important;
+}
+
+.um-profile .planszownia-konto-error {
+    max-width: 700px !important;
+    margin: 0 auto 20px !important;
+    padding: 12px 15px !important;
+    border-radius: 8px !important;
+    background: #ffebee !important;
+    color: #c62828 !important;
+    font-weight: 700 !important;
+}
+
+
+/* =========================================================
+   TELEFON
+   ========================================================= */
+
+@media (max-width: 700px) {
+
+    .um-profile .planszownia-konto-tab {
+        padding: 5px !important;
+    }
+
+    .um-profile .planszownia-konto-field input {
+        min-height: 46px !important;
+    }
+
+    .um-profile .planszownia-konto-title {
+        font-size: 17px !important;
+    }
+
+}
+/* =========================================================
+   FIX – MENU ZĘBATKI NIE MOŻE BYĆ UCIĘTE
+   ========================================================= */
+
+.um-profile {
+    overflow: visible !important;
+}
+
+.um-profile-header {
+    overflow: visible !important;
+}
+
+.um-profile .um-dropdown {
+    z-index: 99999 !important;
+}
+
+
+
+
+
+
+Drugi:
+
+/* Google + Facebook – układ poziomy na komputerze */
+.um-114 .nsl-container-buttons {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 10px !important;
+    width: 100% !important;
+}
+
+.um-114 .nsl-container-buttons > a {
+    display: flex !important;
+    flex: 1 1 0 !important;
+    width: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+}
+
+/* Telefon – przyciski jeden pod drugim */
+@media (max-width: 600px) {
+    .um-114 .nsl-container-buttons {
+        flex-direction: column !important;
+    }
+
+    .um-114 .nsl-container-buttons > a {
+        width: 100% !important;
+        flex: none !important;
+    }
+}
+
+i całe php :
+
+/**
+ * PLANSZOWNIA
+ * PROFIL UŻYTKOWNIKA
+ *
+ * WIADOMOŚCI → RODZIC → KONTO
+ */
+
+
+/* =========================================================
+ * 1. ZAKŁADKI PROFILU
+ * ========================================================= */
+
+add_filter(
+    'um_profile_tabs',
+    'planszownia_profile_tabs',
+    1000
+);
+
+function planszownia_profile_tabs($tabs) {
+
+    /*
+     * Usuwamy stare/dodatkowe zakładki.
+     */
+    unset($tabs['gry']);
+    unset($tabs['wyniki']);
+    unset($tabs['turnieje']);
+    unset($tabs['konto']);
+    unset($tabs['rodzic']);
+
+    /*
+     * Usuwamy standardowe Wpisy i Komentarze.
+     */
+    unset($tabs['posts']);
+    unset($tabs['comments']);
+
+    /*
+     * RODZIC
+     */
+    $tabs['rodzic'] = array(
+        'name'            => 'Rodzic',
+        'icon'            => 'um-faicon-users',
+        'custom'          => true,
+        'default_privacy' => 3,
+    );
+
+    /*
+     * KONTO
+     */
+    $tabs['konto'] = array(
+        'name'            => 'Konto',
+        'icon'            => 'um-faicon-user',
+        'custom'          => true,
+        'default_privacy' => 3,
+    );
+
+    /*
+     * KOŃCOWA KOLEJNOŚĆ:
+     *
+     * WIADOMOŚCI
+     * RODZIC
+     * KONTO
+     */
+
+    $ordered = array();
+
+    /*
+     * WIADOMOŚCI
+     */
+    if (isset($tabs['messages'])) {
+        $ordered['messages'] = $tabs['messages'];
+    }
+
+    /*
+     * Jeżeli UM ma inną nazwę klucza dla Wiadomości,
+     * szukamy jej po nazwie.
+     */
+    if (!isset($ordered['messages'])) {
+
+        foreach ($tabs as $key => $tab) {
+
+            if (
+                isset($tab['name']) &&
+                strtolower(wp_strip_all_tags($tab['name'])) === 'wiadomości'
+            ) {
+
+                $ordered[$key] = $tab;
+                break;
+            }
+        }
+    }
+
+    /*
+     * RODZIC
+     */
+    if (isset($tabs['rodzic'])) {
+        $ordered['rodzic'] = $tabs['rodzic'];
+    }
+
+    /*
+     * KONTO
+     */
+    if (isset($tabs['konto'])) {
+        $ordered['konto'] = $tabs['konto'];
+    }
+
+    /*
+     * Zwracamy tylko nasze trzy zakładki.
+     */
+    return $ordered;
+}
+
+
+/* =========================================================
+ * 2. ZAKŁADKA RODZIC
+ * ========================================================= */
+
+add_action(
+    'um_profile_content_rodzic',
+    'planszownia_profile_rodzic',
+    10,
+    1
+);
+
+function planszownia_profile_rodzic($args) {
+
+    if (!is_user_logged_in()) {
+        return;
+    }
+
+    echo '<div class="planszownia-rodzic-tab">';
+
+    echo '<h3>Strefa Rodzica</h3>';
+
+    echo '<p>Tutaj będą dostępne funkcje dla rodziców.</p>';
+
+    echo '</div>';
+}
+
+
+/* =========================================================
+ * 3. ZAKŁADKA KONTO
+ * ========================================================= */
+
+add_action(
+    'um_profile_content_konto',
+    'planszownia_profile_konto',
+    10,
+    1
+);
+
+function planszownia_profile_konto($args) {
+
+    if (!is_user_logged_in()) {
+        return;
+    }
+
+    $user_id = get_current_user_id();
+    $user    = get_userdata($user_id);
+
+    if (!$user) {
+        return;
+    }
+
+
+    /* =====================================================
+     * ZAPIS FORMULARZA
+     * ===================================================== */
+
+    if (
+        isset($_POST['planszownia_konto_submit']) &&
+        isset($_POST['planszownia_konto_nonce'])
+    ) {
+
+        if (
+            wp_verify_nonce(
+                sanitize_text_field(
+                    wp_unslash(
+                        $_POST['planszownia_konto_nonce']
+                    )
+                ),
+                'planszownia_konto_save'
+            )
+        ) {
+
+            /*
+             * IMIĘ
+             */
+            $first_name = isset($_POST['first_name'])
+                ? sanitize_text_field(
+                    wp_unslash($_POST['first_name'])
+                )
+                : '';
+
+            /*
+             * NAZWISKO
+             */
+            $last_name = isset($_POST['last_name'])
+                ? sanitize_text_field(
+                    wp_unslash($_POST['last_name'])
+                )
+                : '';
+
+            /*
+             * EMAIL
+             */
+            $email = isset($_POST['user_email'])
+                ? sanitize_email(
+                    wp_unslash($_POST['user_email'])
+                )
+                : '';
+
+            $errors = array();
+
+
+            /*
+             * SPRAWDZENIE EMAILA
+             */
+            if (
+                empty($email) ||
+                !is_email($email)
+            ) {
+
+                $errors[] =
+                    'Podaj prawidłowy adres e-mail.';
+
+            } else {
+
+                $email_owner = email_exists($email);
+
+                if (
+                    $email_owner &&
+                    (int) $email_owner !== (int) $user_id
+                ) {
+
+                    $errors[] =
+                        'Ten adres e-mail jest już używany przez inne konto.';
+                }
+            }
+
+
+            /*
+             * NOWE HASŁO
+             */
+            $password = isset($_POST['new_password'])
+                ? (string) wp_unslash($_POST['new_password'])
+                : '';
+
+            $password_confirm = isset($_POST['new_password_confirm'])
+                ? (string) wp_unslash($_POST['new_password_confirm'])
+                : '';
+
+
+            /*
+             * SPRAWDZENIE HASŁA
+             */
+            if ($password !== '') {
+
+                if (strlen($password) < 8) {
+
+                    $errors[] =
+                        'Nowe hasło musi mieć co najmniej 8 znaków.';
+                }
+
+                if ($password !== $password_confirm) {
+
+                    $errors[] =
+                        'Hasła nie są identyczne.';
+                }
+            }
+
+
+            /*
+             * ZAPIS
+             */
+            if (empty($errors)) {
+
+                $update = array(
+                    'ID'         => $user_id,
+                    'first_name' => $first_name,
+                    'last_name'  => $last_name,
+                    'user_email' => $email,
+                );
+
+                if ($password !== '') {
+                    $update['user_pass'] = $password;
+                }
+
+                $result = wp_update_user($update);
+
+                if (is_wp_error($result)) {
+
+                    $errors[] =
+                        $result->get_error_message();
+
+                } else {
+
+                    $user = get_userdata($user_id);
+
+                    echo '<div class="planszownia-konto-success">';
+                    echo 'Konto zostało zaktualizowane.';
+                    echo '</div>';
+                }
+            }
+
+
+            /*
+             * KOMUNIKATY BŁĘDÓW
+             */
+            if (!empty($errors)) {
+
+                echo '<div class="planszownia-konto-error">';
+
+                foreach ($errors as $error) {
+
+                    echo '<div>';
+                    echo esc_html($error);
+                    echo '</div>';
+                }
+
+                echo '</div>';
+            }
+        }
+    }
+
+
+    /* =====================================================
+     * FORMULARZ KONTA
+     * ===================================================== */
+
+    ?>
+
+    <div class="planszownia-konto-tab">
+
+        <div class="planszownia-konto-title">
+
+            <i class="um-faicon-user"></i>
+
+            <span>Konto</span>
+
+        </div>
+
+
+        <form
+            method="post"
+            class="planszownia-konto-form"
+        >
+
+            <?php
+
+            wp_nonce_field(
+                'planszownia_konto_save',
+                'planszownia_konto_nonce'
+            );
+
+            ?>
+
+
+            <!-- NAZWA UŻYTKOWNIKA -->
+
+            <div class="planszownia-konto-field">
+
+                <label>
+                    Nazwa użytkownika
+                </label>
+
+                <input
+                    type="text"
+                    value="<?php echo esc_attr($user->user_login); ?>"
+                    disabled
+                >
+
+            </div>
+
+
+            <!-- IMIĘ -->
+
+            <div class="planszownia-konto-field">
+
+                <label>
+                    Imię
+                </label>
+
+                <input
+                    type="text"
+                    name="first_name"
+                    value="<?php echo esc_attr($user->first_name); ?>"
+                >
+
+            </div>
+
+
+            <!-- NAZWISKO -->
+
+            <div class="planszownia-konto-field">
+
+                <label>
+                    Nazwisko
+                </label>
+
+                <input
+                    type="text"
+                    name="last_name"
+                    value="<?php echo esc_attr($user->last_name); ?>"
+                >
+
+            </div>
+
+
+            <!-- EMAIL -->
+
+            <div class="planszownia-konto-field">
+
+                <label>
+                    Email address
+                </label>
+
+                <input
+                    type="email"
+                    name="user_email"
+                    value="<?php echo esc_attr($user->user_email); ?>"
+                >
+
+            </div>
+
+
+            <!-- NOWE HASŁO -->
+
+            <div class="planszownia-konto-field">
+
+                <label>
+                    Nowe hasło
+                </label>
+
+                <input
+                    type="password"
+                    name="new_password"
+                    value=""
+                    autocomplete="new-password"
+                    placeholder="Pozostaw puste, jeśli nie zmieniasz"
+                >
+
+            </div>
+
+
+            <!-- POWTÓRZ HASŁO -->
+
+            <div class="planszownia-konto-field">
+
+                <label>
+                    Powtórz nowe hasło
+                </label>
+
+                <input
+                    type="password"
+                    name="new_password_confirm"
+                    value=""
+                    autocomplete="new-password"
+                >
+
+            </div>
+
+
+            <!-- PRZYCISK -->
+
+            <div class="planszownia-konto-button">
+
+                <button
+                    type="submit"
+                    name="planszownia_konto_submit"
+                    class="um-button"
+                >
+                    Zaktualizuj konto
+                </button>
+
+            </div>
+
+        </form>
+
+    </div>
+
+    <?php
+}
+
+
+/* =========================================================
+ * 4. NIEBIESKIE ZAKŁADKI RODZIC + KONTO
+ * ========================================================= */
+
+add_action(
+    'wp_head',
+    'planszownia_konto_css',
+    999
+);
+
+function planszownia_konto_css() {
+    ?>
+
+    <style>
+
+        .um-profile .um-profile-nav
+        .um-profile-nav-rodzic.active > a,
+
+        .um-profile .um-profile-nav
+        .um-profile-nav-konto.active > a {
+
+            background: #1976d2 !important;
+            color: #ffffff !important;
+
+        }
+
+
+        .um-profile .um-profile-nav
+        .um-profile-nav-rodzic.active > a span,
+
+        .um-profile .um-profile-nav
+        .um-profile-nav-konto.active > a span {
+
+            color: #ffffff !important;
+
+        }
+
+
+        .um-profile .um-profile-nav
+        .um-profile-nav-rodzic.active > a i,
+
+        .um-profile .um-profile-nav
+        .um-profile-nav-konto.active > a i {
+
+            color: #ffffff !important;
+
+        }
+
+
+        .um-profile .um-profile-nav
+        .um-profile-nav-rodzic:hover > a,
+
+        .um-profile .um-profile-nav
+        .um-profile-nav-konto:hover > a {
+
+            background: #1976d2 !important;
+            color: #ffffff !important;
+
+        }
+
+
+        .planszownia-konto-tab {
+
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 20px;
+            box-sizing: border-box;
+
+        }
+
+
+        .planszownia-konto-title {
+
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 20px;
+
+        }
+
+
+        .planszownia-konto-title i {
+
+            margin-right: 8px;
+
+        }
+
+
+        .planszownia-konto-field {
+
+            margin-bottom: 18px;
+
+        }
+
+
+        .planszownia-konto-field label {
+
+            display: block;
+            font-weight: 700;
+            margin-bottom: 7px;
+
+        }
+
+
+        .planszownia-konto-field input {
+
+            width: 100%;
+            box-sizing: border-box;
+            padding: 12px 14px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: #fff;
+
+        }
+
+
+        .planszownia-konto-field input:disabled {
+
+            background: #f3f3f3;
+
+        }
+
+
+        .planszownia-konto-field input:focus {
+
+            border-color: #1976d2;
+            outline: none;
+
+        }
+
+
+        .planszownia-konto-button {
+
+            margin-top: 20px;
+
+        }
+
+
+        .planszownia-konto-success {
+
+            margin: 0 auto 20px;
+            padding: 12px 15px;
+            max-width: 700px;
+            box-sizing: border-box;
+            border-radius: 6px;
+            background: #e8f5e9;
+            color: #2e7d32;
+            font-weight: 600;
+
+        }
+
+
+        .planszownia-konto-error {
+
+            margin: 0 auto 20px;
+            padding: 12px 15px;
+            max-width: 700px;
+            box-sizing: border-box;
+            border-radius: 6px;
+            background: #ffebee;
+            color: #c62828;
+            font-weight: 600;
+
+        }
+
+    </style>
+
+    <?php
+}
+
+
+/* =========================================================
+ * 5. LOGOWANIE → PROFIL
+ * ========================================================= */
+
+add_filter(
+    'um_login_redirect_url',
+    'planszownia_login_redirect_um',
+    9999,
+    2
+);
+
+function planszownia_login_redirect_um($url, $user_id) {
+
+    if (
+        $user_id &&
+        function_exists('um_user_profile_url')
+    ) {
+
+        return um_user_profile_url($user_id);
+    }
+
+    return $url;
+}
+
+
+/* =========================================================
+ * 6. WORDPRESS LOGOWANIE → PROFIL
+ * ========================================================= */
+
+add_filter(
+    'login_redirect',
+    'planszownia_login_redirect_wp',
+    9999,
+    3
+);
+
+function planszownia_login_redirect_wp(
+    $redirect_to,
+    $requested_redirect_to,
+    $user
+) {
+
+    if (
+        $user instanceof WP_User &&
+        $user->exists() &&
+        function_exists('um_user_profile_url')
+    ) {
+
+        return um_user_profile_url($user->ID);
+    }
+
+    return $redirect_to;
+}
