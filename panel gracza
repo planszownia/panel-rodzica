@@ -1,1 +1,1263 @@
+<?php
+/**
+ * Plugin Name: Planszownia Gracz
+ * Description: Strefa Gracza dla Ultimate Member: biblioteki BGG, biblioteka Planszowni, stoły, głosowania, wyniki i prywatne rankingi grupowe.
+ * Version: 1.3.7
+ * Author: Planszownia
+ * Requires at least: 6.0
+ * Requires PHP: 7.4
+ */
+if (!defined('ABSPATH')) exit;
+
+final class Planszownia_Gracz {
+    const VER = '1.3.7';
+    const DB_VER = '1.3.5';
+    const OPT = 'pw_gracz_settings';
+    private static $instance;
+
+    public static function instance() {
+        if (!self::$instance) self::$instance = new self();
+        return self::$instance;
+    }
+
+    private function __construct() {
+        register_activation_hook(__FILE__, [$this, 'activate']);
+        add_action('plugins_loaded', [$this, 'maybe_upgrade'], 20);
+        add_action('admin_menu', [$this, 'admin_menu']);
+        add_action('admin_init', [$this, 'admin_register_user_fields']);
+        add_action('show_user_profile', [$this, 'user_permission_field']);
+        add_action('edit_user_profile', [$this, 'user_permission_field']);
+        add_action('personal_options_update', [$this, 'save_user_permission_field']);
+        add_action('edit_user_profile_update', [$this, 'save_user_permission_field']);
+        add_action('wp_enqueue_scripts', [$this, 'assets']);
+        // Ultimate Member may load after this plugin. Register the profile tab
+        // after all plugins are loaded as well, and explicitly enable the custom tab.
+        add_filter('um_profile_tabs', [$this, 'um_tab'], 1000, 1);
+        add_filter('um_user_profile_tabs', [$this, 'um_tab'], 1000, 1);
+        add_action('um_profile_content_gracz', [$this, 'render_profile'], 10, 1);
+        add_action('plugins_loaded', [$this, 'ensure_um_profile_tab'], 30);
+        add_action('init', [$this, 'cron_setup']);
+        add_action('pw_gracz_cron', [$this, 'cron_activate_tables']);
+
+        $ajax = [
+            'pw_bgg_search'=>'ajax_bgg_search',
+            'pw_bgg_import'=>'ajax_bgg_import',
+            'pw_game_search'=>'ajax_game_search',
+            'pw_vote'=>'ajax_vote',
+            'pw_create_table'=>'ajax_create_table',
+            'pw_table_action'=>'ajax_table_action',
+            'pw_sync_my_bgg'=>'ajax_sync_my_bgg',
+            'pw_remove_game'=>'ajax_remove_game',
+            'pw_manual_game'=>'ajax_manual_game',
+            'pw_enrich_game'=>'ajax_enrich_game',
+            'pw_create_ranking'=>'ajax_create_ranking',
+            'pw_ranking_action'=>'ajax_ranking_action',
+            'pw_loan_action'=>'ajax_loan_action',
+            'pw_request_loan'=>'ajax_request_loan',
+            'pw_voting_status'=>'ajax_voting_status',
+            'pw_cancel_loan'=>'ajax_cancel_loan',
+            'pw_toggle_loan'=>'ajax_toggle_loan',
+            'pw_save_loan_settings'=>'ajax_save_loan_settings',
+            'pw_loan_status'=>'ajax_loan_status',
+        ];
+        foreach ($ajax as $action=>$method) {
+            add_action('wp_ajax_'.$action, [$this, $method]);
+        }
+    }
+
+    private function tables() {
+        global $wpdb;
+        return [
+            'games'        => $wpdb->prefix.'pw_games',
+            'player_games' => $wpdb->prefix.'pw_player_games',
+            'tables'       => $wpdb->prefix.'pw_tables',
+            'table_players'=> $wpdb->prefix.'pw_table_players',
+            'table_options'=> $wpdb->prefix.'pw_table_options',
+            'rankings'     => $wpdb->prefix.'pw_rankings',
+            'ranking_players'=> $wpdb->prefix.'pw_ranking_players',
+            'results'      => $wpdb->prefix.'pw_results',
+            'loans'        => $wpdb->prefix.'pw_loans',
+        ];
+    }
+
+    private function schema() {
+        global $wpdb;
+        require_once ABSPATH.'wp-admin/includes/upgrade.php';
+        $t=$this->tables(); $c=$wpdb->get_charset_collate();
+        $sql=[];
+        $sql[]="CREATE TABLE {$t['games']} (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            bgg_id bigint unsigned NULL,
+            title varchar(255) NOT NULL,
+            image_url text NULL,
+            bgg_url text NULL,
+            source varchar(30) NOT NULL DEFAULT 'bgg',
+            gc_post_id bigint unsigned NULL,
+            loan_enabled tinyint(1) NOT NULL DEFAULT 1,
+            created_at datetime NOT NULL,
+            updated_at datetime NOT NULL,
+            PRIMARY KEY(id), KEY bgg_id(bgg_id), KEY title(title(100)), KEY gc_post_id(gc_post_id)
+        ) $c;";
+        $sql[]="CREATE TABLE {$t['player_games']} (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            user_id bigint unsigned NOT NULL,
+            game_id bigint unsigned NOT NULL,
+            is_bgg_sync tinyint(1) NOT NULL DEFAULT 0,
+            added_at datetime NOT NULL,
+            PRIMARY KEY(id), UNIQUE KEY user_game(user_id,game_id), KEY user_id(user_id), KEY game_id(game_id)
+        ) $c;";
+        $sql[]="CREATE TABLE {$t['tables']} (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            owner_id bigint unsigned NOT NULL,
+            game_id bigint unsigned NOT NULL,
+            ranking_id bigint unsigned NULL,
+            status varchar(20) NOT NULL DEFAULT 'voting',
+            vote_deadline datetime NULL,
+            created_at datetime NOT NULL,
+            started_at datetime NULL,
+            closed_at datetime NULL,
+            PRIMARY KEY(id), KEY owner_id(owner_id), KEY game_id(game_id), KEY ranking_id(ranking_id), KEY status(status)
+        ) $c;";
+        $sql[]="CREATE TABLE {$t['table_players']} (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            table_id bigint unsigned NOT NULL,
+            user_id bigint unsigned NOT NULL,
+            vote varchar(10) NULL,
+            vote_game_id bigint unsigned NULL,
+            points decimal(10,2) NULL,
+            winner tinyint(1) NOT NULL DEFAULT 0,
+            joined_at datetime NOT NULL,
+            PRIMARY KEY(id), UNIQUE KEY table_user(table_id,user_id), KEY table_id(table_id), KEY user_id(user_id)
+        ) $c;";
+        $table_options=$t['table_options'];
+        $sql[]="CREATE TABLE ".$table_options." (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            table_id bigint unsigned NOT NULL,
+            game_id bigint unsigned NOT NULL,
+            position int unsigned NOT NULL DEFAULT 1,
+            created_at datetime NOT NULL,
+            PRIMARY KEY(id), UNIQUE KEY table_game(table_id,game_id), KEY table_id(table_id), KEY game_id(game_id)
+         ) $c;";
+        $sql[]="CREATE TABLE {$t['rankings']} (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            owner_id bigint unsigned NOT NULL,
+            name varchar(255) NOT NULL,
+            created_at datetime NOT NULL,
+            PRIMARY KEY(id), KEY owner_id(owner_id)
+        ) $c;";
+        $sql[]="CREATE TABLE {$t['ranking_players']} (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            ranking_id bigint unsigned NOT NULL,
+            user_id bigint unsigned NOT NULL,
+            joined_at datetime NOT NULL,
+            PRIMARY KEY(id), UNIQUE KEY ranking_user(ranking_id,user_id), KEY ranking_id(ranking_id), KEY user_id(user_id)
+        ) $c;";
+        $sql[]="CREATE TABLE {$wpdb->prefix}pw_loans (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            game_id bigint unsigned NOT NULL,
+            user_id bigint unsigned NOT NULL,
+            status varchar(20) NOT NULL DEFAULT 'requested',
+            requested_at datetime NOT NULL,
+            approved_at datetime NULL,
+            returned_at datetime NULL,
+            PRIMARY KEY(id), KEY game_id(game_id), KEY user_id(user_id), KEY status(status)
+        ) $c;";
+        $sql[]="CREATE TABLE {$t['results']} (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            table_id bigint unsigned NOT NULL,
+            user_id bigint unsigned NOT NULL,
+            ranking_id bigint unsigned NOT NULL,
+            points decimal(10,2) NOT NULL DEFAULT 0,
+            winner tinyint(1) NOT NULL DEFAULT 0,
+            rank_place int unsigned NULL,
+            ranking_points decimal(10,2) NOT NULL DEFAULT 0,
+            created_at datetime NOT NULL,
+            PRIMARY KEY(id), KEY table_id(table_id), KEY user_id(user_id), KEY ranking_id(ranking_id)
+        ) $c;";
+        foreach($sql as $q) dbDelta($q);
+    }
+
+
+    private function voting_players_html($table_id){
+        global $wpdb; $t=$this->tables();
+        $rows=$wpdb->get_results($wpdb->prepare(
+            "SELECT tp.user_id,tp.vote_game_id,u.display_name FROM {$t['table_players']} tp
+             INNER JOIN {$wpdb->users} u ON u.ID=tp.user_id
+             WHERE tp.table_id=%d ORDER BY tp.id",(int)$table_id
+        ),ARRAY_A);
+        if(!$rows)return '';
+        $out='<div class="pw-voting-players" data-table-id="'.(int)$table_id.'"><div class="pw-voting-players-title">👥 Głosy graczy</div>';
+        foreach($rows as $r){
+            $name=$r['display_name']?:'Gracz'; $game='';
+            if(!empty($r['vote_game_id'])){
+                $g=$wpdb->get_row($wpdb->prepare("SELECT title FROM {$t['games']} WHERE id=%d",(int)$r['vote_game_id']),ARRAY_A);
+                if($g)$game=$g['title'];
+            }
+            $initial=function_exists('mb_substr')?mb_substr($name,0,1):substr($name,0,1);
+            $initial=function_exists('mb_strtoupper')?mb_strtoupper($initial):strtoupper($initial);
+            $out.='<div class="pw-voter-row"><span class="pw-voter-avatar">'.esc_html($initial).'</span><span class="pw-voter-name">'.esc_html($name).'</span>';
+            $out.=$game?'<span class="pw-voter-vote">✓ '.esc_html($game).'</span>':'<span class="pw-voter-pending">jeszcze nie zagłosował</span>';
+            $out.='</div>';
+        }
+        return $out.'</div>';
+    }
+
+    public function activate() {
+        $this->schema();
+        if (!get_option(self::OPT)) update_option(self::OPT, ['bgg_token'=>'','planszownia_bgg'=>'','powered_by_bgg'=>1]);
+        update_option('pw_gracz_db_version', self::DB_VER);
+        $this->cron_setup();
+
+        // If Ultimate Member is already active, enable the custom profile tab.
+        if ( function_exists('UM') && is_object( UM() ) && method_exists( UM(), 'options' ) ) {
+            UM()->options()->update('profile_tab_gracz', true);
+        }
+
+        flush_rewrite_rules();
+    }
+
+    public function maybe_upgrade() {
+        if (get_option('pw_gracz_db_version') !== self::DB_VER) {
+            $this->schema();
+            update_option('pw_gracz_db_version', self::DB_VER);
+        }
+        // Safety migration: older installations may already have pw_games without loan_enabled.
+        global $wpdb;
+        $games_table=$this->tables()['games'];
+        $has_column=$wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$games_table} LIKE %s", 'loan_enabled'));
+        if (!$has_column) {
+            $wpdb->query("ALTER TABLE {$games_table} ADD loan_enabled tinyint(1) NOT NULL DEFAULT 1");
+        }
+        $s=$this->settings();
+        if (!isset($s['powered_by_bgg'])) { $s['powered_by_bgg']=1; update_option(self::OPT,$s); }
+    }
+
+    private function ensure_loan_storage() {
+        global $wpdb; $t=$this->tables(); $c=$wpdb->get_charset_collate();
+        $wpdb->query("CREATE TABLE IF NOT EXISTS {$t['loans']} (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            game_id bigint unsigned NOT NULL,
+            user_id bigint unsigned NOT NULL,
+            status varchar(20) NOT NULL DEFAULT 'requested',
+            requested_at datetime NOT NULL,
+            approved_at datetime NULL,
+            returned_at datetime NULL,
+            PRIMARY KEY(id), KEY game_id(game_id), KEY user_id(user_id), KEY status(status)
+        ) $c;");
+        $has=$wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$t['games']} LIKE %s",'loan_enabled'));
+        if(!$has) $wpdb->query("ALTER TABLE {$t['games']} ADD loan_enabled tinyint(1) NOT NULL DEFAULT 1");
+        $has_reason=$wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$t['loans']} LIKE %s",'decision_note'));
+        if(!$has_reason) $wpdb->query("ALTER TABLE {$t['loans']} ADD decision_note varchar(255) NULL");
+
+    }
+
+    private function settings() {
+        return wp_parse_args(get_option(self::OPT, []), ['bgg_token'=>'','planszownia_bgg'=>'','powered_by_bgg'=>1]);
+    }
+    private function is_um() { return function_exists('um_profile_id'); }
+    private function current_profile_id() { return $this->is_um() ? (int)um_profile_id() : get_current_user_id(); }
+    private function nonce_ok() { return check_ajax_referer('pw_gracz','nonce',false); }
+
+    public function cron_setup() {
+        if (!wp_next_scheduled('pw_gracz_cron')) wp_schedule_event(time()+300, 'hourly', 'pw_gracz_cron');
+    }
+
+    public function assets() {
+        if (!is_user_logged_in()) return;
+        wp_enqueue_style('pw-gracz', plugins_url('assets/gracz.css', __FILE__), [], self::VER);
+        wp_enqueue_script('pw-gracz', plugins_url('assets/gracz.js', __FILE__), ['jquery'], self::VER, true);
+        wp_localize_script('pw-gracz', 'PWGracz', [
+            'ajax'=>admin_url('admin-ajax.php'),
+            'ajaxurl'=>admin_url('admin-ajax.php'),
+            'nonce'=>wp_create_nonce('pw_gracz'),
+            'profile'=>get_current_user_id(),
+            'canCreate'=>$this->can_create_table(get_current_user_id()) ? 1 : 0,
+            'i18n'=>['error'=>'Wystąpił błąd. Spróbuj ponownie.']
+        ]);
+    }
+
+    /**
+     * Make sure Ultimate Member knows that our custom profile tab is enabled.
+     * UM stores custom profile-tab visibility in its options. Without this,
+     * some UM versions can silently omit a custom tab even though the
+     * um_profile_tabs filter is registered correctly.
+     */
+    public function ensure_um_profile_tab() {
+        if ( ! function_exists('UM') || ! is_object( UM() ) || ! method_exists( UM(), 'options' ) ) {
+            return;
+        }
+
+        $option_key = 'profile_tab_gracz';
+        $current = UM()->options()->get( $option_key );
+
+        if ( '' === $current || null === $current || false === $current ) {
+            UM()->options()->update( $option_key, true );
+        }
+    }
+
+    public function um_tab($tabs) {
+        $tabs['gracz'] = [
+            'name' => 'Gracz',
+            'icon' => 'um-faicon-gamepad',
+            'custom' => true,
+            'default_privacy' => 2,
+        ];
+        return $tabs;
+    }
+
+
+    private function club_loan($game_id){
+        global $wpdb; $t=$this->tables();
+        return $wpdb->get_row($wpdb->prepare(
+            "SELECT l.*,u.display_name FROM {$t['loans']} l
+             INNER JOIN {$wpdb->users} u ON u.ID=l.user_id
+             WHERE l.game_id=%d AND l.status IN('requested','borrowed')
+             ORDER BY CASE WHEN l.status='borrowed' THEN 0 ELSE 1 END,l.requested_at ASC LIMIT 1",
+            (int)$game_id
+        ));
+    }
+
+    private function club_game_available($game_id){
+        $loan=$this->club_loan($game_id);
+        return !$loan;
+    }
+
+    private function render_loan_status($game){
+        if(isset($game->loan_enabled) && !(int)$game->loan_enabled){
+            return '<span class="pw-loan-status pw-loan-disabled"><i></i> Wypożyczenie niedostępne</span>';
+        }
+        $loan=$this->club_loan($game->id);
+        $uid=get_current_user_id();
+        if(!$loan){
+            return '<span class="pw-loan-status pw-loan-available"><i></i> Dostępna w klubie</span>'.
+                   (is_user_logged_in()?'<button type="button" class="pw-loan-request" data-game="'.(int)$game->id.'">📦 Chcę wypożyczyć</button>':'');
+        }
+        if($loan->status==='requested'){
+            $mine=((int)$loan->user_id===$uid);
+            return '<span class="pw-loan-status pw-loan-requested"><i></i> Zarezerwowana — oczekuje na decyzję</span>'.
+                   '<span class="pw-loan-who">Chce wypożyczyć: <b>'.esc_html($loan->display_name).'</b></span>'.
+                   ($mine?'<button type="button" class="pw-loan-cancel" data-loan="'.(int)$loan->id.'" data-game="'.(int)$game->id.'">Anuluj prośbę</button>':'');
+        }
+        return '<span class="pw-loan-status pw-loan-borrowed"><i></i> Wypożyczona</span>'.
+               '<span class="pw-loan-who">Wypożyczona przez: <b>'.esc_html($loan->display_name).'</b></span>';
+    }
+
+    private function render_my_loans($uid){
+        global $wpdb; $t=$this->tables();
+        $rows=$wpdb->get_results($wpdb->prepare("SELECT l.*,g.title,g.image_url FROM {$t['loans']} l INNER JOIN {$t['games']} g ON g.id=l.game_id WHERE l.user_id=%d ORDER BY l.requested_at DESC LIMIT 100",$uid));
+        ob_start();
+        echo '<div class="pw-card pw-my-loans"><div class="pw-section-head"><div><h3>📦 Moje wypożyczenia</h3><p>Tu widzisz swoje prośby, decyzje i aktualne wypożyczenia.</p></div><span class="pw-count">'.count($rows).'</span></div>';
+        if(!$rows) echo '<div class="pw-empty pw-wide">Nie masz jeszcze żadnych próśb o wypożyczenie.</div>';
+        else{
+            echo '<div class="pw-my-loans-list">';
+            foreach($rows as $r){
+                $status=$r->status;
+                if($status==='requested') {$label='🟡 Oczekuje na decyzję'; $cls='requested';}
+                elseif($status==='borrowed') {$label='🔴 Wypożyczona'; $cls='borrowed';}
+                elseif($status==='rejected') {$label='⚪ Odrzucona'; $cls='rejected';}
+                elseif($status==='returned') {$label='🟢 Zwrócona'; $cls='returned';}
+                else {$label='⚪ Zakończona'; $cls='rejected';}
+                echo '<div class="pw-my-loan-row"><strong>'.esc_html($r->title).'</strong><span class="pw-my-loan-status '.$cls.'">'.$label.'</span>';
+                if($status==='requested') echo '<button type="button" class="pw-btn pw-btn-light pw-loan-cancel" data-loan="'.(int)$r->id.'">Anuluj prośbę</button>';
+                echo '</div>';
+            }
+            echo '</div>';
+        }
+        echo '</div>';
+        return ob_get_clean();
+    }
+
+    private function render_admin_loans(){
+        ob_start();
+        global $wpdb; $t=$this->tables();
+        $rows=$wpdb->get_results("SELECT l.*,g.title,g.image_url,u.display_name FROM {$t['loans']} l
+            INNER JOIN {$t['games']} g ON g.id=l.game_id
+            INNER JOIN {$wpdb->users} u ON u.ID=l.user_id
+            WHERE l.status IN('requested','borrowed')
+            ORDER BY CASE WHEN l.status='requested' THEN 0 ELSE 1 END,l.requested_at ASC");
+        echo '<div class="pw-admin-loans-panel">';
+        echo '<div class="pw-admin-loans-head"><h2>📦 Wypożyczenia</h2><p>Tutaj pojawiają się wyłącznie zgłoszenia graczy oraz aktualnie wypożyczone gry.</p></div>';
+        if(!$rows) echo '<div class="pw-admin-empty">Brak oczekujących próśb i aktywnych wypożyczeń.</div>';
+        else{
+            echo '<div class="pw-admin-loans-list">';
+            foreach($rows as $r){
+                echo '<div class="pw-admin-loan-card" data-loan-card="'.(int)$r->id.'">';
+                echo '<div><strong>'.esc_html($r->title).'</strong><span class="pw-admin-loan-user">👤 '.esc_html($r->display_name).'</span></div>';
+                echo '<span class="pw-loan-admin-badge '.($r->status==='requested'?'is-requested':'is-borrowed').'">'.($r->status==='requested'?'🟡 Oczekuje na decyzję':'🔴 Wypożyczona').'</span>';
+                echo '<div class="pw-admin-loan-actions">';
+                if($r->status==='requested'){
+                    echo '<button type="button" class="pw-btn pw-admin-loan" data-loan="'.(int)$r->id.'" data-do="approve">✓ Zatwierdź wypożyczenie</button>';
+                    echo '<button type="button" class="pw-btn pw-btn-light pw-admin-loan" data-loan="'.(int)$r->id.'" data-do="reject">✕ Odrzuć</button>';
+                }else{
+                    echo '<button type="button" class="pw-btn pw-admin-loan" data-loan="'.(int)$r->id.'" data-do="return">↩ Potwierdź zwrot</button>';
+                }
+                echo '</div></div>';
+            }
+            echo '</div>';
+        }
+        echo '<div class="pw-admin-loan-rules"><strong>Statusy są wspólne dla wszystkich</strong><p>🟢 Dostępna · 🟡 Zgłoszona do wypożyczenia · 🔴 Wypożyczona. Po odrzuceniu prośba trafia do historii gracza, a po zwrocie znika z aktywnych wypożyczeń.</p></div>';
+        echo '</div>';
+        return ob_get_clean();
+    }
+
+    public function ajax_save_loan_settings(){
+        $this->ensure_loan_storage();
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła. Odśwież stronę i spróbuj ponownie.');
+        if(!current_user_can('manage_options')) wp_send_json_error('Brak uprawnień administratora.');
+        global $wpdb; $t=$this->tables();
+        $has=$wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$t['games']} LIKE %s",'loan_enabled'));
+        if(!$has) $wpdb->query("ALTER TABLE {$t['games']} ADD loan_enabled tinyint(1) NOT NULL DEFAULT 1");
+        $raw=isset($_POST['games']) && is_array($_POST['games']) ? $_POST['games'] : [];
+        $club=$wpdb->get_col("SELECT id FROM {$t['games']} WHERE source='planszownia' OR source='games-collector'");
+        $saved=0;
+        foreach($club as $gid){
+            $enabled=array_key_exists((string)$gid,$raw) ? (!empty($raw[(string)$gid])?1:0) : (array_key_exists($gid,$raw)?(!empty($raw[$gid])?1:0):1);
+            $ok=$wpdb->update($t['games'],['loan_enabled'=>$enabled],['id'=>(int)$gid],['%d'],['%d']);
+            if($ok!==false) $saved++;
+            if(!$enabled) $wpdb->query($wpdb->prepare("DELETE FROM {$t['loans']} WHERE game_id=%d AND status='requested'",(int)$gid));
+        }
+        wp_send_json_success(['message'=>'Ustawienia wypożyczeń zapisane.','saved'=>$saved]);
+    }
+
+    public function ajax_loan_status(){
+        $this->ensure_loan_storage();
+        if(!is_user_logged_in()) wp_send_json_error('Zaloguj się.');
+        $ids=isset($_POST['games']) && is_array($_POST['games']) ? array_map('intval',$_POST['games']) : [];
+        if(!$ids) wp_send_json_success(['items'=>[]]);
+        global $wpdb; $t=$this->tables(); $out=[];
+        foreach(array_unique($ids) as $gid){
+            $g=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['games']} WHERE id=%d AND (source='planszownia' OR source='games-collector')",$gid));
+            if($g) $out[$gid]=$this->render_loan_status($g);
+        }
+        wp_send_json_success(['items'=>$out]);
+    }
+
+    public function ajax_cancel_loan(){
+        $this->ensure_loan_storage();
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.');
+        if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $lid=(int)($_POST['loan']??0); global $wpdb; $t=$this->tables();
+        $loan=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['loans']} WHERE id=%d",$lid));
+        if(!$loan || (int)$loan->user_id!==get_current_user_id()) wp_send_json_error('Nie możesz anulować tej prośby.');
+        if($loan->status!=='requested') wp_send_json_error('Ta prośba nie oczekuje już na decyzję.');
+        $wpdb->delete($t['loans'],['id'=>$lid]);
+        wp_send_json_success(['message'=>'Prośba o wypożyczenie została anulowana.']);
+    }
+
+    public function ajax_toggle_loan(){
+        $this->ensure_loan_storage();
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.');
+        if(!current_user_can('manage_options')) wp_send_json_error('Brak uprawnień administratora.');
+        $gid=(int)($_POST['game']??0); $enabled=!empty($_POST['enabled'])?1:0;
+        if(!$gid) wp_send_json_error('Brak gry.');
+        global $wpdb; $t=$this->tables();
+        $ok=$wpdb->update($t['games'],['loan_enabled'=>$enabled],['id'=>$gid]);
+        if($ok===false) wp_send_json_error('Nie udało się zapisać ustawienia.');
+        if(!$enabled) $wpdb->query($wpdb->prepare("DELETE FROM {$t['loans']} WHERE game_id=%d AND status='requested'",$gid));
+        wp_send_json_success(['message'=>$enabled?'Wypożyczenie włączone.':'Wypożyczenie wyłączone.']);
+    }
+
+    public function render_profile() {
+        $this->ensure_loan_storage();
+        if (!is_user_logged_in()) { echo '<div class="pw-notice">Zaloguj się, aby korzystać ze Strefy Gracza.</div>'; return; }
+        $uid=$this->current_profile_id(); $own=($uid===get_current_user_id());
+        echo '<div class="pw-gracz">';
+        echo '<div class="pw-head"><div><span class="pw-kicker">PLANSZOWNIA</span><h2>Strefa Gracza</h2><p>Gry, stoły, wyniki i prywatne rankingi.</p></div><div class="pw-bgg-mark">Powered by BGG</div></div>';
+        echo '<div class="pw-nav">';
+        echo '<button type="button" class="pw-nav-btn active" data-pw-view="planszownia">🎲 Biblioteka Planszowni</button>';
+        echo '<button type="button" class="pw-nav-btn" data-pw-view="moja">👤 Moja biblioteka</button>';
+        echo '<button type="button" class="pw-nav-btn" data-pw-view="stoly">♟ Stoły</button>';
+        echo '<button type="button" class="pw-nav-btn" data-pw-view="moje-wypozyczenia">📦 Moje wypożyczenia</button>'; if(current_user_can('manage_options')) echo '<button type="button" class="pw-nav-btn pw-admin-nav" data-pw-view="wypozyczenia">📦 Wypożyczenia</button>'; echo '<a class="pw-nav-btn pw-nav-link" href="https://planszownia.pl/tourney/">🏆 Turnieje</a>';
+        echo '</div>';
+        echo '<section class="pw-view active" data-pw-panel="planszownia">'.$this->render_planszownia_library().'</section>';
+        echo '<section class="pw-view" data-pw-panel="moja">'.$this->render_my_library($uid,$own).'</section>';
+        echo '<section class="pw-view" data-pw-panel="stoly">'.$this->render_tables($uid,$own).'</section>';
+        echo '<section class="pw-view" data-pw-panel="moje-wypozyczenia">'.$this->render_my_loans(get_current_user_id()).'</section>';
+        if(current_user_can('manage_options')) echo '<section class="pw-view" data-pw-panel="wypozyczenia">'.$this->render_admin_loans().'</section>';
+        echo '</div>';
+    }
+
+    private function render_planszownia_library() {
+        global $wpdb; $t=$this->tables();
+        $games=$wpdb->get_results("SELECT * FROM {$t['games']} WHERE source='planszownia' OR source='games-collector' ORDER BY title ASC");
+        ob_start();
+        echo '<div class="pw-card"><div class="pw-section-head"><div><h3>Biblioteka Planszowni</h3><p>Gry dostępne w klubie, uporządkowane alfabetycznie.</p></div><span class="pw-count">'.count($games).' gier</span></div>';
+        echo '<input class="pw-search" data-pw-filter="library" placeholder="🔎 Szukaj gry...">';
+        if(current_user_can('manage_options')) echo '<div class="pw-loan-savebar"><span>Ustaw przy grach, czy można je wypożyczać.</span><button type="button" class="pw-btn" id="pw-save-loan-settings">💾 Zapisz ustawienia wypożyczeń</button><span id="pw-loan-save-msg" class="pw-msg"></span></div>';
+        echo '<div class="pw-game-grid" data-pw-library="planszownia">';
+        foreach($games as $g) echo $this->game_card($g,false);
+        if(!$games) echo '<div class="pw-empty pw-wide">Biblioteka Planszowni jest jeszcze pusta. Administrator może zaimportować Games Collector albo zsynchronizować konto BGG.</div>';
+                echo '</div><div class="pw-bgg-credit">Dane gier pochodzące z BGG są oznaczone jako „Powered by BGG”.</div></div>';
+        return ob_get_clean();
+    }
+
+    private function render_my_library($uid,$own) {
+        global $wpdb; $t=$this->tables();
+        $games=$wpdb->get_results($wpdb->prepare("SELECT g.* FROM {$t['games']} g INNER JOIN {$t['player_games']} pg ON pg.game_id=g.id WHERE pg.user_id=%d ORDER BY g.title ASC", $uid));
+        ob_start();
+        echo '<div class="pw-card"><div class="pw-section-head"><div><h3>'.($own?'Moja biblioteka':'Biblioteka gracza').'</h3><p>'.($own?'Synchronizuj BGG albo edytuj listę ręcznie.':'Gry tego gracza, które mogą być wykorzystane przy tworzeniu stołu.').'</p></div><span class="pw-count">'.count($games).' gier</span></div>';
+        if($own){
+            $bgg=get_user_meta($uid,'pw_bgg_username',true);
+            echo '<div class="pw-tools"><input id="pw-bgg-username" value="'.esc_attr($bgg).'" placeholder="Nazwa użytkownika BGG"><button type="button" class="pw-btn" id="pw-sync-bgg">Synchronizuj z BGG</button><button type="button" class="pw-btn pw-btn-light" id="pw-add-bgg">Dodaj z BGG</button><button type="button" class="pw-btn pw-btn-light" id="pw-add-manual">Dodaj ręcznie</button></div>';
+            echo '<div id="pw-bgg-msg" class="pw-msg"></div>';
+            echo '<div id="pw-manual-box" class="pw-inline-box" style="display:none"><input id="pw-manual-title" class="pw-search" placeholder="Nazwa gry"><button type="button" class="pw-btn" id="pw-manual-save">Dodaj</button></div>';
+            echo '<div id="pw-bgg-search" class="pw-inline-box" style="display:none"><input id="pw-bgg-query" class="pw-search" placeholder="Wpisz nazwę gry..." autocomplete="off"><button type="button" class="pw-btn" id="pw-bgg-search-btn">Szukaj</button><div id="pw-bgg-results"></div></div>';
+        }
+        echo '<input class="pw-search" data-pw-filter="library" placeholder="🔎 Szukaj w bibliotece...">';
+        echo '<div class="pw-game-grid">'; foreach($games as $g) echo $this->game_card($g,$own); if(!$games) echo '<div class="pw-empty pw-wide">'.($own?'Nie masz jeszcze gier. Dodaj je z BGG albo ręcznie.':'Ten gracz nie ma jeszcze biblioteki.').'</div>'; echo '</div></div>';
+        return ob_get_clean();
+    }
+
+    private function game_card($g,$editable=false) {
+        $img=$g->image_url ?: plugins_url('assets/placeholder.svg',__FILE__);
+        $out='<article class="pw-game" data-title="'.esc_attr(function_exists('mb_strtolower')?mb_strtolower($g->title):strtolower($g->title)).'">';
+        $out.='<div class="pw-cover"><img loading="lazy" src="'.esc_url($img).'" alt=""></div><div class="pw-game-body"><strong>'.esc_html($g->title).'</strong><div class="pw-game-meta">'.($g->bgg_id?'BGG #'.(int)$g->bgg_id:'Gra dodana ręcznie').'</div>';
+        if(!empty($g->bgg_url)) $out.='<a class="pw-link" target="_blank" rel="noopener" href="'.esc_url($g->bgg_url).'">Zobacz w BGG</a>';
+        if($g->source==='planszownia' || $g->source==='games-collector'){
+            $out.='<div class="pw-loan-box" data-game="'.(int)$g->id.'">'.$this->render_loan_status($g).'</div>';
+            if(current_user_can('manage_options')){
+                $enabled=isset($g->loan_enabled)?(int)$g->loan_enabled:1;
+                $out.='<div class="pw-admin-loan-tile '.($enabled?'is-on':'is-off').'" data-game="'.(int)$g->id.'">';
+                $out.='<span class="pw-admin-loan-dot"></span><span class="pw-admin-loan-label">'.($enabled?'Wypożyczanie włączone':'Wypożyczanie wyłączone').'</span>';
+                $out.='<label class="pw-admin-switch"><input type="checkbox" class="pw-loan-toggle" data-game="'.(int)$g->id.'" '.checked($enabled,1,false).'><span></span></label></div>';
+            }
+        }
+        if($editable && empty($g->bgg_id)) $out.='<button type="button" class="pw-link pw-enrich-game" data-game="'.(int)$g->id.'">Pobierz okładkę z BGG</button>';
+        if($editable) $out.='<button type="button" class="pw-link pw-remove-game" data-game="'.(int)$g->id.'">Usuń z biblioteki</button>';
+        $out.='</div></article>'; return $out;
+    }
+
+    private function render_tables($uid,$own) {
+        ob_start();
+        echo '<div class="pw-card"><div class="pw-section-head"><div><h3>Stoły</h3><p>Umawiajcie się na grę, głosujcie i zapisujcie wyniki.</p></div>';
+        if($this->can_create_table(get_current_user_id())) echo '<button type="button" class="pw-btn" id="pw-open-create-table">+ Stwórz stół</button>';
+        echo '</div>';
+        echo '<div class="pw-subnav"><button type="button" class="active" data-pw-sub="active">Aktywne stoły</button><button type="button" data-pw-sub="closed">Zamknięte gry</button><button type="button" data-pw-sub="rankings">Rankingi</button></div>';
+        echo '<div data-pw-subpanel="active">'.$this->render_active_tables($uid).'</div>';
+        echo '<div data-pw-subpanel="closed" style="display:none">'.$this->render_closed_tables($uid).'</div>';
+        echo '<div data-pw-subpanel="rankings" style="display:none">'.$this->render_rankings($uid).'</div>';
+        if($this->can_create_table(get_current_user_id())) echo '<div id="pw-create-table" class="pw-create-box" style="display:none">'.$this->render_create_table_form().'</div>';
+        echo '</div>'; return ob_get_clean();
+    }
+
+    private function render_active_tables($uid) {
+        global $wpdb;$t=$this->tables();
+        $rows=$wpdb->get_results($wpdb->prepare("SELECT DISTINCT tb.*,g.title,g.image_url FROM {$t['tables']} tb INNER JOIN {$t['table_players']} tp ON tp.table_id=tb.id INNER JOIN {$t['games']} g ON g.id=tb.game_id WHERE tp.user_id=%d AND tb.status IN('voting','active') ORDER BY tb.created_at DESC", $uid));
+        ob_start(); if(!$rows) echo '<div class="pw-empty">Nie masz teraz aktywnego stołu.</div>';
+        foreach($rows as $r) echo $this->table_card($r,$uid,false); return ob_get_clean();
+    }
+    private function render_closed_tables($uid) {
+        global $wpdb;$t=$this->tables();
+        $rows=$wpdb->get_results($wpdb->prepare("SELECT DISTINCT tb.*,g.title,g.image_url FROM {$t['tables']} tb INNER JOIN {$t['table_players']} tp ON tp.table_id=tb.id INNER JOIN {$t['games']} g ON g.id=tb.game_id WHERE tp.user_id=%d AND tb.status='closed' ORDER BY tb.closed_at DESC LIMIT 100", $uid));
+        ob_start(); if(!$rows) echo '<div class="pw-empty">Brak zamkniętych gier.</div>';
+        foreach($rows as $r) echo $this->table_card($r,$uid,true); return ob_get_clean();
+    }
+
+    private function table_card($r,$uid,$closed=false) {
+        global $wpdb;$t=$this->tables();
+        $players=$wpdb->get_results($wpdb->prepare("SELECT tp.*,u.display_name FROM {$t['table_players']} tp INNER JOIN {$wpdb->users} u ON u.ID=tp.user_id WHERE tp.table_id=%d ORDER BY tp.id", $r->id));
+        $mine=null; foreach($players as $p) if((int)$p->user_id===$uid) $mine=$p;
+        $status=$r->status==='voting'?'Głosowanie':($r->status==='active'?'Aktywny stół':'Zamknięta gra');
+        ob_start();
+        echo '<div class="pw-table-card"><div class="pw-table-top"><div><span class="pw-badge">'.esc_html($status).'</span><h4>'.esc_html($r->title).'</h4></div><span class="pw-table-no">#'.(int)$r->id.'</span></div>';
+        echo '<div class="pw-players">'; foreach($players as $p){$cl=$p->winner?' winner':''; echo '<span class="pw-player'.$cl.'">'.esc_html($p->display_name).'</span>';} echo '</div>';
+        if($r->status==='voting' && $mine){
+            $options=$wpdb->get_results($wpdb->prepare("SELECT o.*,g.title,g.image_url, (SELECT COUNT(*) FROM {$t['table_players']} vp WHERE vp.table_id=o.table_id AND vp.vote_game_id=o.game_id) votes FROM {$t['table_options']} o INNER JOIN {$t['games']} g ON g.id=o.game_id WHERE o.table_id=%d ORDER BY o.position ASC,o.id ASC", $r->id));
+            echo '<div class="pw-vote-box"><strong>Wybierz grę:</strong><div class="pw-poll-options">';
+            foreach($options as $o){$sel=((int)$mine->vote_game_id===(int)$o->game_id)?' selected':''; $img=$o->image_url?:''; echo '<button type="button" class="pw-poll-option'.$sel.'" data-table="'.(int)$r->id.'" data-game="'.(int)$o->game_id.'"><span class="pw-poll-thumb">'.($img?'<img loading="lazy" src="'.esc_url($img).'" alt="">':'').'</span><span class="pw-poll-name">'.esc_html($o->title).'</span><span class="pw-poll-votes">'.(int)$o->votes.' głos'.(((int)$o->votes===1)?'':'ów').'</span></button>';} 
+            echo $this->voting_players_html((int)$r->id);
+            echo '</div></div><small class="pw-deadline">Głosowanie do '.esc_html(mysql2date('d.m.Y H:i',$r->vote_deadline)).'</small>';
+            if((int)$r->owner_id===$uid){
+                echo '<div class="pw-voting-owner-actions"><button type="button" class="pw-btn pw-finish-voting" data-table="'.(int)$r->id.'">Zakończ głosowanie teraz</button><button type="button" class="pw-btn pw-delete-voting" data-table="'.(int)$r->id.'">Usuń głosowanie</button></div>';
+            }
+        }
+        if($r->status==='active' && (int)$r->owner_id===$uid){
+            echo '<div class="pw-result-box"><h5>Wynik po grze</h5><p>Zaznacz zwycięzcę lub kilku zwycięzców i wpisz punkty.</p><div class="pw-result-list">';
+            foreach($players as $p){
+                echo '<label><span>'.esc_html($p->display_name).'</span><input type="number" step="0.01" class="pw-points" data-user="'.(int)$p->user_id.'" placeholder="punkty"><span class="pw-check"><input type="checkbox" class="pw-winner" data-user="'.(int)$p->user_id.'"> zwycięzca</span></label>';
+            }
+            echo '</div><button type="button" class="pw-btn pw-close-table" data-table="'.(int)$r->id.'">Zapisz wynik i zamknij stół</button></div>';
+        }
+        if($closed){
+            echo '<div class="pw-closed-meta">Wynik zapisany w rankingu. '.esc_html(mysql2date('d.m.Y H:i',$r->closed_at)).'</div>';
+            echo '<div class="pw-closed-results">'.$this->closed_results($r->id).'</div>';
+            if((int)$r->owner_id===$uid){
+                echo '<button type="button" class="pw-btn pw-btn-light pw-edit-result" data-table="'.(int)$r->id.'">✏️ Edytuj wynik</button>';
+                echo '<div class="pw-edit-result-box" id="pw-edit-result-'.(int)$r->id.'" style="display:none">';
+                echo '<div class="pw-result-list">';
+                $saved=$wpdb->get_results($wpdb->prepare("SELECT r.*,u.display_name FROM {$t['results']} r INNER JOIN {$wpdb->users} u ON u.ID=r.user_id WHERE r.table_id=%d ORDER BY r.rank_place ASC,u.display_name ASC",$r->id));
+                foreach($saved as $sr){
+                    echo '<label><span>'.esc_html($sr->display_name).'</span><input type="number" step="0.01" class="pw-edit-points" data-user="'.(int)$sr->user_id.'" value="'.esc_attr($sr->points).'" placeholder="punkty"><span class="pw-check"><input type="checkbox" class="pw-edit-winner" data-user="'.(int)$sr->user_id.'" '.checked((int)$sr->winner,1,false).'> zwycięzca</span></label>';
+                }
+                echo '</div><button type="button" class="pw-btn pw-save-result" data-table="'.(int)$r->id.'">Zapisz poprawiony wynik</button><div class="pw-msg pw-edit-msg"></div></div>';
+            }
+        }
+        echo '</div>'; return ob_get_clean();
+    }
+
+    private function closed_results($table_id) {
+        global $wpdb;$t=$this->tables();
+        $rows=$wpdb->get_results($wpdb->prepare("SELECT r.*,u.display_name FROM {$t['results']} r INNER JOIN {$wpdb->users} u ON u.ID=r.user_id WHERE r.table_id=%d ORDER BY r.rank_place ASC,u.display_name ASC",$table_id));
+        if(!$rows) return '';
+        $out='<div class="pw-result-chips">'; foreach($rows as $r){$out.='<span><b>'.(int)$r->rank_place.'.</b> '.esc_html($r->display_name).' · '.esc_html(number_format((float)$r->points,2,',','')).' pkt'.($r->winner?' 🏆':'').'</span>';} return $out.'</div>';
+    }
+
+    private function render_rankings($uid) {
+        global $wpdb;$t=$this->tables();
+        $rankings=$wpdb->get_results($wpdb->prepare("SELECT DISTINCT r.* FROM {$t['rankings']} r INNER JOIN {$t['ranking_players']} rp ON rp.ranking_id=r.id WHERE rp.user_id=%d OR r.owner_id=%d ORDER BY r.name ASC",$uid,$uid));
+        ob_start();
+        echo '<div class="pw-ranking-head"><div><h4>Rankingi grup</h4><p>Każdy ranking jest widoczny tylko dla jego uczestników.</p></div><button type="button" class="pw-btn pw-btn-light" id="pw-new-ranking">+ Nowy ranking</button></div>';
+        echo '<div class="pw-ranking-create" style="display:none"><input id="pw-ranking-name" class="pw-search" placeholder="Nazwa rankingu, np. Czwartkowa Ekipa"><button type="button" class="pw-btn" id="pw-save-ranking">Utwórz ranking</button><div id="pw-ranking-msg" class="pw-msg"></div></div>';
+        foreach($rankings as $rk){
+            echo '<div class="pw-ranking"><div class="pw-ranking-title"><div><h5>'.esc_html($rk->name).'</h5><small>Utworzony przez '.esc_html(get_the_author_meta('display_name',$rk->owner_id)).'</small></div><div class="pw-ranking-title-actions"><span>'.count($this->ranking_members($rk->id)).' graczy</span>'.((int)$rk->owner_id===$uid?'<button type="button" class="pw-link pw-delete-ranking" data-ranking="'.(int)$rk->id.'">🗑️ Usuń ranking</button>':'').'</div></div>';
+            $stats=$this->ranking_stats($rk->id);
+            echo '<div class="pw-table-scroll"><table><thead><tr><th>#</th><th>Gracz</th><th>Gry</th><th>Wygrane</th><th>% zwycięstw</th><th>Punkty</th></tr></thead><tbody>';
+            $i=1; foreach($stats as $s){echo '<tr><td><b>'.($i++).'</b></td><td>'.esc_html($s->display_name).'</td><td>'.(int)$s->games.'</td><td>'.(int)$s->wins.'</td><td>'.esc_html(number_format((float)$s->pct,1,',','')).'%</td><td><b>'.esc_html(number_format((float)$s->score,0,',','')).'</b></td></tr>';}
+            if(!$stats) echo '<tr><td colspan="6">Brak rozegranych gier.</td></tr>';
+            echo '</tbody></table></div></div>';
+        }
+        if(!$rankings) echo '<div class="pw-empty">Nie masz jeszcze żadnego rankingu. Możesz utworzyć pierwszy przy tworzeniu stołu.</div>';
+        return ob_get_clean();
+    }
+
+    private function ranking_members($rid){
+        global $wpdb;$t=$this->tables(); return $wpdb->get_results($wpdb->prepare("SELECT u.ID,u.display_name FROM {$t['ranking_players']} rp INNER JOIN {$wpdb->users} u ON u.ID=rp.user_id WHERE rp.ranking_id=%d ORDER BY u.display_name ASC",$rid));
+    }
+
+    private function ranking_stats($rid){
+        global $wpdb;$t=$this->tables();
+        return $wpdb->get_results($wpdb->prepare("SELECT u.display_name,COUNT(r.id) games,COALESCE(SUM(r.winner),0) wins,CASE WHEN COUNT(r.id)>0 THEN (SUM(r.winner)/COUNT(r.id))*100 ELSE 0 END pct,COALESCE(SUM(r.ranking_points),0) score FROM {$t['ranking_players']} rp INNER JOIN {$wpdb->users} u ON u.ID=rp.user_id LEFT JOIN {$t['results']} r ON r.user_id=rp.user_id AND r.ranking_id=rp.ranking_id WHERE rp.ranking_id=%d GROUP BY rp.user_id,u.display_name ORDER BY score DESC,pct DESC,games DESC,u.display_name ASC",$rid));
+    }
+
+    private function render_create_table_form(){
+        $users=get_users(['fields'=>['ID','display_name'],'orderby'=>'display_name','order'=>'ASC','exclude'=>[get_current_user_id()],'number'=>500]);
+        ob_start();
+        echo '<div class="pw-create-inner"><div class="pw-section-head"><div><h4>Stwórz stół</h4><p>Wybierz graczy, grę, czas głosowania i ranking.</p></div><button type="button" class="pw-x" id="pw-close-create">×</button></div>';
+        echo '<label class="pw-label">1. Gracze</label><div class="pw-user-list">';
+        foreach($users as $u) echo '<label><input type="checkbox" name="pw_player" value="'.(int)$u->ID.'"> <span>'.esc_html($u->display_name).'</span></label>';
+        echo '</div>';
+        echo '<label class="pw-label">2. Gry do głosowania</label><p class="pw-vote-help">Dodaj kilka gier. Każdy zaproszony gracz wybierze jedną z nich. Po zakończeniu głosowania wygrywa gra z największą liczbą głosów. Przy remisie wygrywa pierwsza z remisujących na liście.</p><input id="pw-table-game-search" class="pw-search" placeholder="Szukaj gry w bibliotece Planszowni lub wybranych graczy" autocomplete="off"><div id="pw-table-game-results" class="pw-results"></div><div id="pw-selected-games" class="pw-selected-games"></div>';
+        echo '<label class="pw-label">3. Czas głosowania</label><select id="pw-vote-hours" class="pw-select"><option value="1">1 godzina</option><option value="2" selected>2 godziny</option><option value="4">4 godziny</option><option value="12">12 godzin</option><option value="24">24 godziny</option><option value="48">48 godzin</option><option value="72">72 godziny</option></select>';
+        echo '<label class="pw-label">4. Ranking wyników</label><div class="pw-ranking-choice"><select id="pw-ranking-select" class="pw-select"><option value="new">+ Utwórz nowy ranking</option>';
+        foreach($this->user_rankings(get_current_user_id()) as $x) echo '<option value="'.(int)$x->id.'">'.esc_html($x->name).'</option>';
+        echo '</select><input id="pw-new-ranking-name" class="pw-search" placeholder="Nazwa nowego rankingu"></div>';
+        echo '<div class="pw-score-help"><b>Punktacja:</b> 1. miejsce = liczba graczy, 2. miejsce = liczba graczy − 1, dalej analogicznie, minimum 1 pkt. Przy remisie gracze otrzymują punkty za wspólne miejsce.</div>';
+        echo '<div class="pw-create-actions"><button type="button" class="pw-btn pw-btn-big" id="pw-create-table-btn">Utwórz głosowanie</button><button type="button" class="pw-btn pw-btn-big pw-btn-direct" id="pw-start-direct-btn">Rozpocznij grę bez głosowania</button></div><div id="pw-create-msg" class="pw-msg"></div></div>';
+        return ob_get_clean();
+    }
+
+    private function user_rankings($uid){
+        global $wpdb;$t=$this->tables(); return $wpdb->get_results($wpdb->prepare("SELECT DISTINCT r.* FROM {$t['rankings']} r LEFT JOIN {$t['ranking_players']} rp ON rp.ranking_id=r.id WHERE r.owner_id=%d OR rp.user_id=%d ORDER BY r.name ASC",$uid,$uid));
+    }
+
+    private function can_create_table($uid){
+        // Każdy zalogowany użytkownik jest graczem i może tworzyć stoły/głosowania.
+        return (bool)$uid;
+    }
+
+    private function bgg_request($path,$args=[]){
+        $s=$this->settings();
+        if(empty($s['bgg_token'])) return new WP_Error('no_token','Brak tokena BGG w ustawieniach wtyczki.');
+        $url='https://boardgamegeek.com/xmlapi2/'.ltrim($path,'/');
+        if($args) $url=add_query_arg($args,$url);
+        $headers=[
+            'Authorization'=>'Bearer '.trim($s['bgg_token']),
+            'Accept'=>'application/xml,text/xml;q=0.9,*/*;q=0.8',
+            'User-Agent'=>'Planszownia-Gracz/'.self::VER.' (+https://planszownia.pl)',
+        ];
+
+        // BGG can queue collection/user requests and answer with HTTP 202.
+        // A single 2-second retry is not reliable enough, especially for larger collections.
+        $last_code=0;
+        $last_body='';
+        for($attempt=1;$attempt<=7;$attempt++){
+            $r=wp_remote_get($url,['timeout'=>30,'headers'=>$headers,'redirection'=>3]);
+            if(is_wp_error($r)) return $r;
+            $last_code=(int)wp_remote_retrieve_response_code($r);
+            $last_body=wp_remote_retrieve_body($r);
+
+            if($last_code===200){
+                $xml=@simplexml_load_string($last_body);
+                if(!$xml) return new WP_Error('bgg_xml','BGG zwróciło odpowiedź, której nie udało się odczytać.');
+                return $xml;
+            }
+
+            if($last_code===202 || $last_code===429){
+                $retry=(int)wp_remote_retrieve_header($r,'retry-after');
+                if($retry<1) $retry=2;
+                if($retry>5) $retry=5;
+                if($attempt<7) sleep($retry);
+                continue;
+            }
+
+            $detail='';
+            if($last_code===401 || $last_code===403) $detail=' Token aplikacji BGG jest nieprawidłowy, wygasł albo nie jest zapisany w tej instalacji wtyczki.';
+            elseif($last_code===404) $detail=' Nie znaleziono użytkownika lub zasobu BGG.';
+            return new WP_Error('bgg_http','BGG zwróciło HTTP '.$last_code.'.'.$detail);
+        }
+
+        return new WP_Error('bgg_queued','BGG nadal przetwarza żądanie po kilku próbach (HTTP '.$last_code.'). Spróbuj ponownie za chwilę.');
+    }
+
+    private function upsert_game($data,$source='bgg',$gc_post_id=0){
+        global $wpdb;$t=$this->tables();$now=current_time('mysql');
+        $existing=0;
+        if(!empty($data['bgg_id'])) $existing=$wpdb->get_var($wpdb->prepare("SELECT id FROM {$t['games']} WHERE bgg_id=%d",(int)$data['bgg_id']));
+        if(!$existing && $gc_post_id) $existing=$wpdb->get_var($wpdb->prepare("SELECT id FROM {$t['games']} WHERE gc_post_id=%d",$gc_post_id));
+        if($existing){
+            $wpdb->update($t['games'],['title'=>$data['title'],'image_url'=>$data['image_url'],'bgg_url'=>$data['bgg_url'],'source'=>$source,'gc_post_id'=>$gc_post_id?:null,'updated_at'=>$now],['id'=>$existing]);
+            return (int)$existing;
+        }
+        $wpdb->insert($t['games'],['bgg_id'=>!empty($data['bgg_id'])?(int)$data['bgg_id']:null,'title'=>$data['title'],'image_url'=>$data['image_url']??'','bgg_url'=>$data['bgg_url']??'','source'=>$source,'gc_post_id'=>$gc_post_id?:null,'created_at'=>$now,'updated_at'=>$now]);
+        return (int)$wpdb->insert_id;
+    }
+
+    private function attach_game($uid,$gid,$sync=false){
+        global $wpdb;$t=$this->tables();
+        $exists=$wpdb->get_var($wpdb->prepare("SELECT id FROM {$t['player_games']} WHERE user_id=%d AND game_id=%d",$uid,$gid));
+        if($exists) $wpdb->update($t['player_games'],['is_bgg_sync'=>$sync?1:0],['id'=>$exists]);
+        else $wpdb->insert($t['player_games'],['user_id'=>$uid,'game_id'=>$gid,'is_bgg_sync'=>$sync?1:0,'added_at'=>current_time('mysql')]);
+    }
+
+    public function ajax_bgg_search(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła. Odśwież stronę.'); if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $q=sanitize_text_field(wp_unslash($_POST['query']??'')); if(!$q) wp_send_json_error('Wpisz nazwę gry.');
+        $xml=$this->bgg_request('search',['query'=>$q,'type'=>'boardgame']); if(is_wp_error($xml)) wp_send_json_error($xml->get_error_message());
+        $out=[]; foreach($xml->item as $i){$id=(int)$i['id'];$name='';foreach($i->name as $n){if((string)$n['type']==='primary'){$name=(string)$n['value'];break;}}if(!$name&&isset($i->name[0]))$name=(string)$i->name[0]['value'];if($id&&$name)$out[]=['id'=>$id,'title'=>$name];if(count($out)>=25)break;}
+        wp_send_json_success($out);
+    }
+
+    private function bgg_game($id){
+        $xml=$this->bgg_request('thing',['id'=>(int)$id,'stats'=>1]); if(is_wp_error($xml)) return $xml; $i=$xml->item[0];
+        $title='Gra'; foreach($i->name as $n){if((string)$n['type']==='primary'){$title=(string)$n['value'];break;}}
+        $img=(string)($i->image??''); if(!$img) $img=(string)($i->thumbnail??'');
+        return ['bgg_id'=>(int)$id,'title'=>$title,'image_url'=>$img,'bgg_url'=>'https://boardgamegeek.com/boardgame/'.(int)$id];
+    }
+
+    public function ajax_bgg_import(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.'); if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $id=(int)($_POST['id']??0); if(!$id) wp_send_json_error('Brak identyfikatora gry.'); $g=$this->bgg_game($id); if(is_wp_error($g)) wp_send_json_error($g->get_error_message());
+        $gid=$this->upsert_game($g,'bgg'); $this->attach_game(get_current_user_id(),$gid,false); wp_send_json_success(['message'=>'Gra dodana do Twojej biblioteki.']);
+    }
+
+    public function ajax_manual_game(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.'); if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $title=sanitize_text_field(wp_unslash($_POST['title']??'')); if(!$title) wp_send_json_error('Podaj nazwę gry.');
+
+        // Try to enrich a manually entered title from BGG automatically.
+        $g=null; $xml=$this->bgg_request('search',['query'=>$title,'type'=>'boardgame']);
+        if(!is_wp_error($xml)){
+            $first_id=0; foreach($xml->item as $i){$first_id=(int)$i['id']; if($first_id) break;}
+            if($first_id){$candidate=$this->bgg_game($first_id); if(!is_wp_error($candidate)) $g=$candidate;}
+        }
+        if(!$g) $g=['bgg_id'=>0,'title'=>$title,'image_url'=>'','bgg_url'=>''];
+        $gid=$this->upsert_game($g,$g['bgg_id']?'bgg':'manual'); $this->attach_game(get_current_user_id(),$gid,false);
+        wp_send_json_success(['message'=>$g['bgg_id']?'Gra dodana z okładką BGG.':'Gra dodana ręcznie.']);
+    }
+
+    public function ajax_enrich_game(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.'); if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $gid=(int)($_POST['game']??0); if(!$gid) wp_send_json_error('Brak gry.');
+        global $wpdb; $t=$this->tables();
+        $game=$wpdb->get_row($wpdb->prepare("SELECT g.* FROM {$t['games']} g INNER JOIN {$t['player_games']} pg ON pg.game_id=g.id WHERE g.id=%d AND pg.user_id=%d LIMIT 1",$gid,get_current_user_id()));
+        if(!$game) wp_send_json_error('Nie znaleziono gry w Twojej bibliotece.');
+        $xml=$this->bgg_request('search',['query'=>$game->title,'type'=>'boardgame']); if(is_wp_error($xml)) wp_send_json_error($xml->get_error_message());
+        $first_id=0; foreach($xml->item as $i){$first_id=(int)$i['id']; if($first_id) break;}
+        if(!$first_id) wp_send_json_error('Nie znaleziono odpowiednika w BGG.');
+        $data=$this->bgg_game($first_id); if(is_wp_error($data)) wp_send_json_error($data->get_error_message());
+        $wpdb->update($t['games'],['bgg_id'=>$data['bgg_id'],'title'=>$data['title'],'image_url'=>$data['image_url'],'bgg_url'=>$data['bgg_url'],'source'=>'bgg','updated_at'=>current_time('mysql')],['id'=>$gid]);
+        wp_send_json_success(['message'=>'Pobrano dane i okładkę z BGG.']);
+    }
+
+    public function ajax_remove_game(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.'); $gid=(int)($_POST['game']??0); if(!$gid) wp_send_json_error('Brak gry.'); global $wpdb;$t=$this->tables(); $wpdb->delete($t['player_games'],['game_id'=>$gid,'user_id'=>get_current_user_id()]); wp_send_json_success();
+    }
+
+    public function ajax_sync_my_bgg(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.'); if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $uid=get_current_user_id();
+        $name=sanitize_text_field(wp_unslash($_POST['username']??''));
+        $name=preg_replace('/\s+/',' ',$name);
+        if(!$name) wp_send_json_error('Podaj dokładną nazwę użytkownika BGG.');
+        update_user_meta($uid,'pw_bgg_username',$name);
+
+        $xml=$this->bgg_request('collection',['username'=>trim($name),'own'=>1,'excludesubtype'=>'boardgameexpansion']);
+        if(is_wp_error($xml)) wp_send_json_error($xml->get_error_message());
+
+        global $wpdb;$t=$this->tables();$n=0;$seen=[];
+        foreach($xml->item as $i){
+            $id=(int)$i['objectid'];
+            $title=trim((string)$i->name);
+            if(!$id||!$title) continue;
+
+            // Collection responses can omit image URLs. Fetch the game record from BGG
+            // in that case so the library gets the proper cover whenever possible.
+            $img=trim((string)($i->image??''));
+            if(!$img) $img=trim((string)($i->thumbnail??''));
+            if(!$img){
+                $details=$this->bgg_game($id);
+                if(!is_wp_error($details)){
+                    $title=$details['title']?:$title;
+                    $img=$details['image_url'];
+                }
+            }
+
+            $gid=$this->upsert_game([
+                'bgg_id'=>$id,
+                'title'=>$title,
+                'image_url'=>$img,
+                'bgg_url'=>'https://boardgamegeek.com/boardgame/'.$id
+            ],'bgg');
+            $this->attach_game($uid,$gid,true);
+            $seen[]=$gid;
+            $n++;
+        }
+
+        // A successful empty collection is valid: remove previous BGG-synced games,
+        // while keeping games that the user added manually.
+        if($seen){
+            $placeholders=implode(',',array_fill(0,count($seen),'%d'));
+            $wpdb->query($wpdb->prepare("DELETE FROM {$t['player_games']} WHERE user_id=%d AND is_bgg_sync=1 AND game_id NOT IN ($placeholders)",array_merge([$uid],$seen)));
+        }else{
+            $wpdb->delete($t['player_games'],['user_id'=>$uid,'is_bgg_sync'=>1]);
+        }
+
+        $message=$n===0
+            ? 'Połączenie z BGG działa, ale konto nie ma gier oznaczonych jako posiadane (OWN). Sprawdź kolekcję na BGG i zaznaczenie „Own”.'
+            : 'Zsynchronizowano '.$n.' gier z BGG dla użytkownika „'.$name.'”.';
+        wp_send_json_success(['message'=>$message,'count'=>$n]);
+    }
+
+    public function ajax_game_search(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.'); if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        global $wpdb;$t=$this->tables();$q=sanitize_text_field(wp_unslash($_POST['query']??'')); if(mb_strlen($q)<2) wp_send_json_success([]);
+        $like='%'.$wpdb->esc_like($q).'%'; $uids=array_map('intval',(array)($_POST['players']??[])); $uids[]=get_current_user_id();$uids=array_values(array_unique(array_filter($uids)));
+        $parts=[];$params=[];
+        $parts[]="g.source='planszownia'";
+        $placeholders=implode(',',array_fill(0,count($uids),'%d'));
+        if($uids){$parts[]="pg.user_id IN ($placeholders)";$params=array_merge($params,$uids);}
+        $where='('.implode(' OR ',$parts).') AND g.title LIKE %s';$params[]=$like;
+        $rows=$wpdb->get_results($wpdb->prepare("SELECT DISTINCT g.* FROM {$t['games']} g LEFT JOIN {$t['player_games']} pg ON pg.game_id=g.id WHERE $where ORDER BY g.title ASC LIMIT 50",$params));
+        $out=[];foreach($rows as $g){$source=$g->source==='planszownia'?'Planszownia':'Biblioteka gracza';$out[]=['id'=>(int)$g->id,'title'=>$g->title,'source'=>$source];}wp_send_json_success($out);
+    }
+
+    public function ajax_vote(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.'); if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $tid=(int)($_POST['table']??0);$gid=(int)($_POST['game_id']??0);global $wpdb;$t=$this->tables();
+        $tb=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['tables']} WHERE id=%d",$tid));if(!$tb||$tb->status!=='voting')wp_send_json_error('To głosowanie nie jest już aktywne.');
+        $row=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['table_players']} WHERE table_id=%d AND user_id=%d",$tid,get_current_user_id()));if(!$row)wp_send_json_error('Nie jesteś zaproszony do tego głosowania.');
+        $valid=$wpdb->get_var($wpdb->prepare("SELECT id FROM {$t['table_options']} WHERE table_id=%d AND game_id=%d",$tid,$gid));if(!$valid)wp_send_json_error('Wybrana gra nie należy do tego głosowania.');
+        $wpdb->update($t['table_players'],['vote_game_id'=>$gid,'vote'=>null],['id'=>$row->id]);
+        $this->maybe_activate($tid);
+        $fresh=$wpdb->get_row($wpdb->prepare("SELECT status FROM {$t['tables']} WHERE id=%d",$tid));
+        $options=$wpdb->get_results($wpdb->prepare("SELECT game_id,(SELECT COUNT(*) FROM {$t['table_players']} vp WHERE vp.table_id=%d AND vp.vote_game_id=o.game_id) votes FROM {$t['table_options']} o WHERE o.table_id=%d ORDER BY o.position ASC,o.id ASC",$tid,$tid));
+        $votes=[];foreach($options as $o)$votes[(string)$o->game_id]=(int)$o->votes;
+        wp_send_json_success(['votes'=>$votes,'activated'=>$fresh&&$fresh->status==='active']);
+    }
+
+    private function maybe_activate($tid){
+        global $wpdb;$t=$this->tables();$tb=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['tables']} WHERE id=%d",$tid));if(!$tb||$tb->status!=='voting')return;
+        $players=$wpdb->get_results($wpdb->prepare("SELECT * FROM {$t['table_players']} WHERE table_id=%d ORDER BY id",$tid));
+        $all=true;foreach($players as $p)if(!$p->vote_game_id){$all=false;break;}
+        $deadline_due=$tb->vote_deadline && strtotime($tb->vote_deadline)<=current_time('timestamp');
+        if($all||$deadline_due){
+            $options=$wpdb->get_results($wpdb->prepare("SELECT * FROM {$t['table_options']} WHERE table_id=%d ORDER BY position ASC,id ASC",$tid));
+            if(!$options){$wpdb->update($t['tables'],['status'=>'closed','closed_at'=>current_time('mysql')],['id'=>$tid]);return;}
+            $winner_id=(int)$options[0]->game_id;$best=-1;
+            foreach($options as $o){$votes=(int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['table_players']} WHERE table_id=%d AND vote_game_id=%d",$tid,$o->game_id));if($votes>$best){$best=$votes;$winner_id=(int)$o->game_id;}}
+            // Przy remisie zostaje pierwsza opcja, bo sprawdzamy je w kolejności position/id i zmieniamy zwycięzcę tylko przy ścisłym >.
+            $wpdb->update($t['tables'],['game_id'=>$winner_id,'status'=>'active','started_at'=>current_time('mysql'),'vote_deadline'=>null],['id'=>$tid]);
+        }
+    }
+
+    public function cron_activate_tables(){
+        global $wpdb;$t=$this->tables();$ids=$wpdb->get_col($wpdb->prepare("SELECT id FROM {$t['tables']} WHERE status='voting' AND vote_deadline IS NOT NULL AND vote_deadline<=%s",current_time('mysql')));foreach($ids as $id)$this->maybe_activate((int)$id);
+    }
+
+    public function ajax_create_table(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.'); if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');$uid=get_current_user_id();if(!$this->can_create_table($uid))wp_send_json_error('Nie masz uprawnienia do tworzenia stołów.');
+        $game_ids=array_map('intval',(array)($_POST['game_ids']??[]));$game_ids=array_values(array_unique(array_filter($game_ids)));if(!$game_ids && !empty($_POST['game_id']))$game_ids=[(int)$_POST['game_id']];
+        $direct_start=!empty($_POST['direct_start']);
+        $players=array_map('intval',(array)($_POST['players']??[]));$players=array_values(array_unique(array_filter($players)));$players[]=$uid;$players=array_values(array_unique($players));
+        if($direct_start){if(count($game_ids)!==1)wp_send_json_error('Przy rozpoczęciu bez głosowania wybierz dokładnie jedną grę.');}
+        else if(count($game_ids)<2)wp_send_json_error('Dodaj przynajmniej dwie gry do głosowania.');
+        if(count($players)<2)wp_send_json_error('Wybierz przynajmniej dwóch graczy łącznie z Tobą.');
+        global $wpdb;$t=$this->tables();$valid_games=[];foreach($game_ids as $gid){if($wpdb->get_var($wpdb->prepare("SELECT id FROM {$t['games']} WHERE id=%d",$gid)))$valid_games[]=$gid;}if(count($valid_games)!==count($game_ids))wp_send_json_error('Jedna z wybranych gier nie istnieje.');
+        $hours=max(1,min(168,(int)($_POST['hours']??2)));$ranking=sanitize_text_field(wp_unslash($_POST['ranking']??'new'));$rid=0;
+        if($ranking==='new'){$name=sanitize_text_field(wp_unslash($_POST['new_ranking']??''));if(!$name)$name='Ranking grupy '.current_time('d.m.Y');$wpdb->insert($t['rankings'],['owner_id'=>$uid,'name'=>$name,'created_at'=>current_time('mysql')]);$rid=(int)$wpdb->insert_id;}else{$rid=(int)$ranking;$ok=$wpdb->get_var($wpdb->prepare("SELECT r.id FROM {$t['rankings']} r LEFT JOIN {$t['ranking_players']} rp ON rp.ranking_id=r.id WHERE r.id=%d AND (r.owner_id=%d OR rp.user_id=%d)",$rid,$uid,$uid));if(!$ok)wp_send_json_error('Nieprawidłowy ranking.');}
+        foreach($players as $p)$wpdb->query($wpdb->prepare("INSERT IGNORE INTO {$t['ranking_players']} (ranking_id,user_id,joined_at) VALUES (%d,%d,%s)",$rid,$p,current_time('mysql')));
+        $deadline=$direct_start?null:wp_date('Y-m-d H:i:s',current_time('timestamp')+$hours*3600);
+        $first=(int)$valid_games[0];
+        $status=$direct_start?'active':'voting';
+        $started=$direct_start?current_time('mysql'):null;
+        $wpdb->insert($t['tables'],['owner_id'=>$uid,'game_id'=>$first,'ranking_id'=>$rid,'status'=>$status,'vote_deadline'=>$deadline,'started_at'=>$started,'created_at'=>current_time('mysql')]);$tid=(int)$wpdb->insert_id;
+        foreach($valid_games as $pos=>$gid)$wpdb->insert($t['table_options'],['table_id'=>$tid,'game_id'=>$gid,'position'=>$pos+1,'created_at'=>current_time('mysql')]);
+        foreach($players as $p)$wpdb->insert($t['table_players'],['table_id'=>$tid,'user_id'=>$p,'vote'=>null,'vote_game_id'=>null,'joined_at'=>current_time('mysql')]);
+        if($direct_start) wp_send_json_success(['message'=>'Gra została od razu dodana do aktywnego stołu.']);
+        wp_send_json_success(['message'=>'Głosowanie zostało utworzone. Gracze wybierają jedną z '.$this->count_n($valid_games).' gier.']);
+    }
+
+    private function count_n($arr){return count((array)$arr);}
+
+    public function ajax_create_ranking(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.');if(!is_user_logged_in())wp_send_json_error('Brak logowania.');$name=sanitize_text_field(wp_unslash($_POST['name']??''));if(!$name)wp_send_json_error('Podaj nazwę rankingu.');global $wpdb;$t=$this->tables();$uid=get_current_user_id();$wpdb->insert($t['rankings'],['owner_id'=>$uid,'name'=>$name,'created_at'=>current_time('mysql')]);$rid=(int)$wpdb->insert_id;$wpdb->insert($t['ranking_players'],['ranking_id'=>$rid,'user_id'=>$uid,'joined_at'=>current_time('mysql')]);wp_send_json_success(['message'=>'Ranking został utworzony.']);
+    }
+
+    public function ajax_table_action(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.');if(!is_user_logged_in())wp_send_json_error('Brak logowania.');$tid=(int)($_POST['table']??0);$action=sanitize_key($_POST['do']??'');global $wpdb;$t=$this->tables();$tb=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['tables']} WHERE id=%d",$tid));if(!$tb||$tb->owner_id!=get_current_user_id())wp_send_json_error('Tylko osoba tworząca stół może wykonać tę akcję.');
+        if($action==='finish_vote'){
+            if($tb->status!=='voting')wp_send_json_error('To głosowanie nie jest już aktywne.');
+            $this->maybe_activate($tid);
+            $fresh=$wpdb->get_row($wpdb->prepare("SELECT status,game_id FROM {$t['tables']} WHERE id=%d",$tid));
+            if(!$fresh||$fresh->status!=='active')wp_send_json_error('Nie udało się zakończyć głosowania.');
+            wp_send_json_success(['message'=>'Głosowanie zakończone. Wybrana gra została przeniesiona do aktywnego stołu.']);
+        }
+        if($action==='delete_vote'){
+            if($tb->status!=='voting')wp_send_json_error('Można usunąć tylko trwające głosowanie.');
+            $wpdb->delete($t['table_options'],['table_id'=>$tid]);
+            $wpdb->delete($t['table_players'],['table_id'=>$tid]);
+            $wpdb->delete($t['tables'],['id'=>$tid]);
+            wp_send_json_success(['message'=>'Głosowanie zostało usunięte.']);
+        }
+        if($action==='edit_result'){
+            if($tb->status!=='closed') wp_send_json_error('Ta gra nie jest zamknięta.');
+            $existing=$wpdb->get_results($wpdb->prepare("SELECT * FROM {$t['results']} WHERE table_id=%d ORDER BY id ASC",$tid));
+            if(!$existing) wp_send_json_error('Brak zapisanego wyniku.');
+            $results=[];$winners=0;
+            foreach($existing as $p){
+                $uidp=(int)$p->user_id;
+                $raw=isset($_POST['points'][$uidp])?wp_unslash($_POST['points'][$uidp]):'0';
+                $points=is_numeric($raw)?(float)$raw:0;
+                $win=!empty($_POST['winner'][$uidp])?1:0;
+                if($win)$winners++;
+                $results[]=['id'=>(int)$p->id,'user_id'=>$uidp,'points'=>$points,'winner'=>$win];
+            }
+            if(!$winners) wp_send_json_error('Zaznacz przynajmniej jednego zwycięzcę.');
+            usort($results,function($a,$b){return $b['points']<=>$a['points'];});
+            $count=count($results);$last=null;$place=0;
+            foreach($results as $i=>$rr){
+                if($last===null||$rr['points']<$last)$place=$i+1;
+                $last=$rr['points'];$rp=max(1,$count-$place+1);
+                $wpdb->update($t['results'],['points'=>$rr['points'],'winner'=>$rr['winner'],'rank_place'=>$place,'ranking_points'=>$rp],['id'=>$rr['id'],'table_id'=>$tid]);
+            }
+            wp_send_json_success(['message'=>'Wynik został poprawiony. Ranking przeliczono ponownie.']);
+        }
+        if($action!=='close')wp_send_json_error('Nieznana akcja.');if($tb->status!=='active')wp_send_json_error('Ten stół nie jest aktywny.');
+        $players=$wpdb->get_results($wpdb->prepare("SELECT * FROM {$t['table_players']} WHERE table_id=%d ORDER BY id",$tid));$ranking=(int)$tb->ranking_id;if(!$ranking)wp_send_json_error('Brak rankingu.');if(count($players)<1)wp_send_json_error('Brak graczy.');
+        $results=[];$winners=0;foreach($players as $p){$raw=isset($_POST['points'][$p->user_id])?wp_unslash($_POST['points'][$p->user_id]):'0';$points=is_numeric($raw)?(float)$raw:0;$win=!empty($_POST['winner'][$p->user_id])?1:0;if($win)$winners++;$results[]=['user_id'=>(int)$p->user_id,'points'=>$points,'winner'=>$win];}
+        if(!$winners)wp_send_json_error('Zaznacz przynajmniej jednego zwycięzcę.');usort($results,function($a,$b){return $b['points']<=>$a['points'];});$count=count($results);$last=null;$place=0;
+        foreach($results as $i=>$r){if($last===null||$r['points']<$last)$place=$i+1;$last=$r['points'];$rp=max(1,$count-$place+1);$wpdb->insert($t['results'],['table_id'=>$tid,'user_id'=>$r['user_id'],'ranking_id'=>$ranking,'points'=>$r['points'],'winner'=>$r['winner'],'rank_place'=>$place,'ranking_points'=>$rp,'created_at'=>current_time('mysql')]);}
+        $wpdb->update($t['tables'],['status'=>'closed','closed_at'=>current_time('mysql')],['id'=>$tid]);wp_send_json_success(['message'=>'Wynik zapisany. Ranking został zaktualizowany.']);
+    }
+
+    public function ajax_ranking_action(){
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.');
+        if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $rid=(int)($_POST['ranking']??0);
+        $action=sanitize_key($_POST['do']??'');
+        if($action!=='delete') wp_send_json_error('Nieznana akcja.');
+        global $wpdb; $t=$this->tables(); $uid=get_current_user_id();
+        $rk=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['rankings']} WHERE id=%d",$rid));
+        if(!$rk || (int)$rk->owner_id!==$uid) wp_send_json_error('Tylko autor rankingu może go usunąć.');
+        $active=$wpdb->get_var($wpdb->prepare("SELECT id FROM {$t['tables']} WHERE ranking_id=%d AND status IN('voting','active') LIMIT 1",$rid));
+        if($active) wp_send_json_error('Nie można usunąć rankingu, który jest używany przez aktywny stół.');
+        $wpdb->delete($t['results'],['ranking_id'=>$rid]);
+        $wpdb->delete($t['ranking_players'],['ranking_id'=>$rid]);
+        $wpdb->delete($t['rankings'],['id'=>$rid]);
+        wp_send_json_success(['message'=>'Ranking został usunięty.']);
+    }
+
+    public function admin_menu(){add_menu_page('Planszownia Gracz','Planszownia Gracz','manage_options','pw-gracz',[$this,'admin_page'],'dashicons-groups',58);}
+
+    public function admin_register_user_fields(){ }
+    public function user_permission_field($user){
+        if(!current_user_can('edit_users'))return;echo '<h2>Planszownia – Strefa Gracza</h2><table class="form-table"><tr><th><label for="pw_can_create_tables">Tworzenie stołów</label></th><td><label><input type="checkbox" name="pw_can_create_tables" id="pw_can_create_tables" value="1" '.checked((int)get_user_meta($user->ID,'pw_can_create_tables',true),1,false).'> Zezwól temu użytkownikowi na tworzenie stołów i głosowań.</label></td></tr></table>';
+    }
+    public function save_user_permission_field($user_id){
+        if(!current_user_can('edit_user',$user_id))return;update_user_meta($user_id,'pw_can_create_tables',isset($_POST['pw_can_create_tables'])?1:0);
+    }
+
+    public function admin_page(){
+        if(!current_user_can('manage_options'))return;$s=$this->settings();$msg='';$type='success';
+        if(isset($_POST['pw_save'])&&check_admin_referer('pw_save_settings')){$token=trim(wp_unslash($_POST['bgg_token']??''));$s['bgg_token']=$token;$s['planszownia_bgg']=sanitize_text_field(wp_unslash($_POST['planszownia_bgg']??''));$s['powered_by_bgg']=isset($_POST['powered_by_bgg'])?1:0;update_option(self::OPT,$s);$msg='Ustawienia zapisane.';}
+        if(isset($_POST['pw_import_gc'])&&check_admin_referer('pw_import_gc')){$n=$this->import_gc();$msg='Zaimportowano '.$n.' gier z Games Collector.';}
+        if(isset($_POST['pw_sync_club'])&&check_admin_referer('pw_sync_club')){$n=$this->sync_club_bgg($s['planszownia_bgg']);if(is_wp_error($n)){$msg=$n->get_error_message();$type='error';}else{$msg='Zsynchronizowano '.$n.' gier Planszowni z BGG.';}}
+        if(isset($_POST['pw_clear_club'])&&check_admin_referer('pw_clear_club')){$n=$this->clear_club_library();$msg='Usunięto '.$n.' gier z biblioteki Planszowni. Gry na BGG pozostały bez zmian.';}
+        echo '<div class="wrap"><h1>Planszownia Gracz</h1>'.($msg?'<div class="notice notice-'.esc_attr($type).' is-dismissible"><p>'.esc_html($msg).'</p></div>':'');
+        echo '<p>Konfiguracja biblioteki Planszowni, BGG i uprawnień Strefy Gracza.</p><form method="post">'.wp_nonce_field('pw_save_settings','_wpnonce',true,false).'<table class="form-table"><tr><th>Token BGG</th><td><input type="password" name="bgg_token" value="'.esc_attr($s['bgg_token']).'" class="regular-text" autocomplete="new-password"><p class="description">Wklej token aplikacji BGG. Nie udostępniaj go użytkownikom.</p></td></tr><tr><th>Użytkownik BGG Planszowni</th><td><input type="text" name="planszownia_bgg" value="'.esc_attr($s['planszownia_bgg']).'" class="regular-text"><p class="description">Konto BGG, którego kolekcja OWN jest biblioteką Planszowni.</p></td></tr><tr><th>Oznaczenie BGG</th><td><label><input type="checkbox" name="powered_by_bgg" value="1" '.checked(!empty($s['powered_by_bgg']),true,false).'> Pokazuj „Powered by BGG” w Strefie Gracza</label><p class="description">Wymagane dla publicznej aplikacji korzystającej z BGG API.</p></td></tr></table><p><button class="button button-primary" name="pw_save">Zapisz ustawienia</button></p></form>';
+        echo '<hr><h2>Biblioteka Planszowni</h2><p><strong>1.</strong> Możesz najpierw zaimportować obecną bibliotekę z Games Collector. <strong>2.</strong> Możesz też utrzymywać bibliotekę przez konto BGG Planszowni.</p><form method="post" style="display:inline-block;margin-right:10px">'.wp_nonce_field('pw_import_gc','_wpnonce',true,false).'<button class="button" name="pw_import_gc">Importuj z Games Collector</button></form><form method="post" style="display:inline-block;margin-right:8px">'.wp_nonce_field('pw_sync_club','_wpnonce',true,false).'<button class="button button-primary" name="pw_sync_club">Synchronizuj bibliotekę Planszowni z BGG</button></form><form method="post" style="display:inline-block" onsubmit="return confirm(\"Czy na pewno chcesz wyczyścić całą bibliotekę Planszowni? Gry zostaną usunięte tylko z tej wtyczki, nie z BGG.\");">'.wp_nonce_field('pw_clear_club','_wpnonce',true,false).'<button class="button" style="color:#b42318;border-color:#e5a0a0" name="pw_clear_club">Wyczyść bibliotekę Planszowni</button></form>';
+        $this->render_admin_loans();
+        echo '<hr><h2>Uprawnienia</h2><p>Administratorzy mogą tworzyć stoły automatycznie. Innym osobom możesz nadać uprawnienie w <strong>Użytkownicy → Edytuj użytkownika → Planszownia – Strefa Gracza</strong>.</p>';
+        echo '</div>';
+    }
+
+    private function import_gc(){
+        global $wpdb;$n=0;
+        $types=[]; if(post_type_exists('gc_game'))$types[]='gc_game'; if(post_type_exists('games_collector'))$types[]='games_collector';
+        if(!$types)return 0;
+        foreach($types as $type){$q=new WP_Query(['post_type'=>$type,'posts_per_page'=>-1,'post_status'=>'publish','no_found_rows'=>true]);foreach($q->posts as $p){$img=get_the_post_thumbnail_url($p->ID,'medium')?:'';$gid=$this->upsert_game(['bgg_id'=>0,'title'=>$p->post_title,'image_url'=>$img,'bgg_url'=>''],'planszownia',$p->ID);if($gid)$n++;}}
+        return $n;
+    }
+
+    private function clear_club_library(){
+        global $wpdb;
+        $t=$this->tables();
+        return (int)$wpdb->query("DELETE FROM {$t['games']} WHERE source='planszownia'");
+    }
+
+    private function sync_club_bgg($name){
+        if(!$name)return new WP_Error('no_name','Podaj nazwę użytkownika BGG Planszowni.');
+        $name=trim($name);
+        $xml=$this->bgg_request('collection',['username'=>$name,'own'=>1,'excludesubtype'=>'boardgameexpansion']);
+        if(is_wp_error($xml))return $xml;$n=0;
+        foreach($xml->item as $i){$id=(int)$i['objectid'];$title=(string)$i->name;if(!$id||!$title)continue;$img=(string)($i->image??'');$this->upsert_game(['bgg_id'=>$id,'title'=>$title,'image_url'=>$img,'bgg_url'=>'https://boardgamegeek.com/boardgame/'.$id],'planszownia');$n++;}
+        return $n;
+    }
+
+    public function ajax_request_loan(){
+        $this->ensure_loan_storage();
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.');
+        if(!is_user_logged_in()) wp_send_json_error('Brak logowania.');
+        $gid=(int)($_POST['game']??0); if(!$gid) wp_send_json_error('Brak gry.');
+        global $wpdb; $t=$this->tables(); $uid=get_current_user_id();
+        $game=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['games']} WHERE id=%d AND (source='planszownia' OR source='games-collector')",$gid));
+        if(!$game) wp_send_json_error('Tej gry nie ma w bibliotece Planszowni.');
+        if(isset($game->loan_enabled) && !(int)$game->loan_enabled) wp_send_json_error('Ta gra nie jest obecnie dostępna do wypożyczenia.');
+        $mine=$wpdb->get_var($wpdb->prepare("SELECT id FROM {$t['loans']} WHERE game_id=%d AND user_id=%d AND status='requested' LIMIT 1",$gid,$uid));
+        if($mine) wp_send_json_error('Masz już aktywną prośbę o tę grę.');
+        $active=$this->club_loan($gid);
+        if($active) wp_send_json_error($active->status==='borrowed'?'Gra jest już wypożyczona.':'Ktoś już zgłosił chęć wypożyczenia tej gry.');
+        $inserted=$wpdb->insert($t['loans'],[
+            'game_id'=>$gid,'user_id'=>$uid,'status'=>'requested','requested_at'=>current_time('mysql')
+        ],['%d','%d','%s','%s']);
+        if($inserted===false) wp_send_json_error('Nie udało się zapisać prośby o wypożyczenie. Spróbuj ponownie.');
+        wp_send_json_success(['message'=>'Zgłoszenie wypożyczenia zostało wysłane.','loan'=>(int)$wpdb->insert_id,'game'=>$gid]);
+    }
+
+    public function ajax_loan_action(){
+        $this->ensure_loan_storage();
+        if(!$this->nonce_ok()) wp_send_json_error('Sesja wygasła.');
+        if(!current_user_can('manage_options')) wp_send_json_error('Brak uprawnień administratora.');
+        $lid=(int)($_POST['loan']??0); $do=sanitize_key($_POST['do']??'');
+        if(!$lid || !in_array($do,['approve','reject','return'],true)) wp_send_json_error('Nieprawidłowa akcja.');
+        global $wpdb; $t=$this->tables();
+        $loan=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['loans']} WHERE id=%d",$lid));
+        if(!$loan) wp_send_json_error('Nie znaleziono wypożyczenia.');
+        if($do==='approve'){
+            $other=$wpdb->get_var($wpdb->prepare("SELECT id FROM {$t['loans']} WHERE game_id=%d AND status='borrowed' AND id<>%d LIMIT 1",(int)$loan->game_id,$lid));
+            if($other) wp_send_json_error('Ta gra jest już wypożyczona.');
+            $wpdb->update($t['loans'],['status'=>'borrowed','approved_at'=>current_time('mysql')],['id'=>$lid]);
+            wp_send_json_success(['message'=>'Wypożyczenie potwierdzone.']);
+        }
+        if($do==='reject'){
+            $reason=sanitize_text_field(wp_unslash($_POST['reason']??'Odmowa wypożyczenia przez Planszownię.'));
+            $ok=$wpdb->update($t['loans'],['status'=>'rejected','decision_note'=>$reason],['id'=>$lid],['%s','%s'],['%d']);
+            if($ok===false) wp_send_json_error('Nie udało się zapisać decyzji.');
+            wp_send_json_success(['message'=>'Zgłoszenie odrzucone.','reason'=>$reason]);
+        }
+        $wpdb->update($t['loans'],['status'=>'returned','returned_at'=>current_time('mysql')],['id'=>$lid]);
+        wp_send_json_success(['message'=>'Zwrot potwierdzony. Gra jest ponownie dostępna.']);
+    }
+
+    public function ajax_voting_status(){
+        if(!is_user_logged_in())wp_send_json_error('Zaloguj się.');
+        $tid=(int)($_POST['table_id']??0); global $wpdb; $t=$this->tables();
+        $ok=(int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['table_players']} WHERE table_id=%d AND user_id=%d",$tid,get_current_user_id()));
+        if(!$ok)wp_send_json_error('Brak dostępu.');
+        wp_send_json_success(['html'=>$this->voting_players_html($tid)]);
+    }
+
+}
+Planszownia_Gracz::instance();
+:root{--pw-orange:#f28c00;--pw-orange-dark:#c96f00;--pw-navy:#15263d;--pw-navy-2:#223c5c;--pw-bg:#f6f7f9;--pw-card:#fff;--pw-border:#e2e7ed;--pw-muted:#697382;--pw-green:#23814b;--pw-danger:#b42318}
+.pw-gracz{font-family:inherit;color:var(--pw-navy);max-width:1120px;margin:0 auto;padding:12px 0 30px}.pw-head{display:flex;justify-content:space-between;align-items:center;gap:20px;background:linear-gradient(135deg,var(--pw-navy),var(--pw-navy-2));color:#fff;border-radius:18px;padding:24px;margin-bottom:12px}.pw-kicker{color:#ff9d18;font-size:12px;font-weight:900;letter-spacing:2px}.pw-head h2{margin:4px 0;font-size:29px;line-height:1.15}.pw-head p{margin:0;opacity:.82}.pw-bgg-mark{font-size:12px;font-weight:800;border:1px solid rgba(255,255,255,.35);border-radius:999px;padding:8px 11px;white-space:nowrap}.pw-nav{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}.pw-nav-btn{appearance:none;border:1px solid var(--pw-border);background:#fff;color:var(--pw-navy);border-radius:12px;padding:13px 10px;font:inherit;font-weight:800;cursor:pointer;box-shadow:0 2px 8px rgba(21,38,61,.04)}.pw-nav-btn.active{background:var(--pw-orange);border-color:var(--pw-orange);color:#fff}.pw-view{display:none}.pw-view.active{display:block}.pw-card{background:var(--pw-card);border:1px solid var(--pw-border);border-radius:16px;padding:18px;box-shadow:0 5px 18px rgba(21,38,61,.05)}.pw-section-head,.pw-ranking-head,.pw-table-top{display:flex;justify-content:space-between;gap:15px;align-items:flex-start}.pw-section-head h3,.pw-ranking-head h4{margin:0 0 4px;font-size:20px}.pw-section-head p,.pw-ranking-head p{margin:0;color:var(--pw-muted)}.pw-count{background:#fff1df;color:#b86600;border-radius:999px;padding:7px 10px;font-size:12px;font-weight:900;white-space:nowrap}.pw-search{width:100%;box-sizing:border-box;border:1px solid var(--pw-border);border-radius:10px;padding:11px 13px;margin:15px 0;font:inherit;background:#fff}.pw-game-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;align-items:stretch}.pw-game{border:1px solid var(--pw-border);border-radius:14px;overflow:hidden;background:#fff;transition:transform .15s,box-shadow .15s;display:flex;flex-direction:column;min-width:0}.pw-game:hover{transform:translateY(-2px);box-shadow:0 7px 18px rgba(0,0,0,.07)}.pw-cover{aspect-ratio:3/4;background:#eef1f4;display:flex;align-items:center;justify-content:center;overflow:hidden}.pw-cover img{width:100%;height:100%;object-fit:cover}.pw-game-body{padding:11px;display:flex;flex-direction:column;flex:1}.pw-game-body strong{display:block;font-size:14px;line-height:1.25;min-height:2.5em}.pw-game-meta{font-size:11px;color:var(--pw-muted);margin-top:5px}.pw-link{display:inline-block;border:0;background:none;color:var(--pw-orange-dark);font-weight:800;padding:6px 0;cursor:pointer;text-decoration:none}.pw-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pw-tools input{flex:1;min-width:220px;margin:0}.pw-btn{appearance:none;border:0;border-radius:10px;background:var(--pw-orange);color:#fff;padding:11px 15px;font:inherit;font-weight:900;cursor:pointer}.pw-btn:hover{background:var(--pw-orange-dark)}.pw-btn:disabled{opacity:.55;cursor:wait}.pw-btn-light{background:#edf1f5;color:var(--pw-navy)}.pw-btn-light:hover{background:#e1e7ed}.pw-btn-big{width:100%;margin-top:15px}.pw-msg{margin-top:10px;font-weight:800}.pw-subnav{display:flex;gap:6px;margin:18px 0 14px;border-bottom:1px solid var(--pw-border);overflow:auto}.pw-subnav button{appearance:none;border:0;background:transparent;padding:10px 12px;font:inherit;font-weight:900;color:var(--pw-muted);cursor:pointer;white-space:nowrap}.pw-subnav button.active{color:var(--pw-orange-dark);border-bottom:3px solid var(--pw-orange)}.pw-create-box{margin-top:15px;background:#f8fafc;border:1px solid var(--pw-border);border-radius:14px;padding:16px}.pw-create-inner{max-width:850px}.pw-x{appearance:none;border:0;background:#e9edf1;border-radius:50%;width:34px;height:34px;font-size:22px;cursor:pointer}.pw-label{display:block;font-weight:900;margin:14px 0 7px}.pw-user-list{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:250px;overflow:auto;padding-right:3px}.pw-user-list label{display:flex;gap:7px;align-items:center;background:#fff;border:1px solid var(--pw-border);padding:9px;border-radius:9px;cursor:pointer}.pw-user-list label:has(input:checked){border-color:var(--pw-orange);box-shadow:0 0 0 1px var(--pw-orange)}.pw-ranking-choice{display:flex;gap:8px}.pw-ranking-choice .pw-search{margin:0}.pw-select{width:100%;padding:10px;border:1px solid var(--pw-border);border-radius:10px;background:#fff;font:inherit}.pw-score-help{font-size:12px;color:var(--pw-muted);background:#fff;padding:10px;border:1px solid var(--pw-border);border-radius:10px;margin-top:10px}.pw-results{display:grid;gap:6px}.pw-results button,.pw-bgg-result{appearance:none;width:100%;border:1px solid var(--pw-border);background:#fff;border-radius:9px;padding:10px;text-align:left;cursor:pointer;font:inherit;font-weight:700}.pw-results button:hover,.pw-bgg-result:hover{border-color:var(--pw-orange);background:#fff9f1}.pw-table-card{border:1px solid var(--pw-border);border-radius:14px;padding:15px;margin-bottom:12px;background:#fff}.pw-badge{display:inline-block;background:#eef2f6;color:#566171;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900}.pw-table-card h4{margin:7px 0 0;font-size:18px}.pw-table-no{color:#a0a7af;font-weight:900}.pw-players{display:flex;flex-wrap:wrap;gap:6px;margin:13px 0}.pw-player{background:#f1f4f7;border-radius:999px;padding:6px 9px;font-size:12px}.pw-player.winner{background:#fff1df;color:#b86600;font-weight:900}.pw-vote-row{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.pw-vote{appearance:none;border:1px solid var(--pw-border);background:#fff;border-radius:9px;padding:8px 12px;cursor:pointer;font:inherit;font-weight:800}.pw-vote.selected{background:var(--pw-orange);color:#fff;border-color:var(--pw-orange)}.pw-deadline{display:block;color:var(--pw-muted);margin-top:8px}.pw-result-box{background:#f8fafc;border-radius:12px;padding:12px;margin-top:12px}.pw-result-box h5{margin:0 0 4px;font-size:16px}.pw-result-box p{margin:0 0 10px;color:var(--pw-muted);font-size:13px}.pw-result-list{display:grid;gap:8px}.pw-result-list label{display:flex;gap:8px;align-items:center;background:#fff;border:1px solid var(--pw-border);padding:9px;border-radius:9px}.pw-result-list label>span:first-child{font-weight:800}.pw-check{margin-left:auto;font-size:12px;white-space:nowrap}.pw-points{margin-left:auto;width:105px;border:1px solid var(--pw-border);border-radius:7px;padding:7px}.pw-ranking{margin-top:15px;border:1px solid var(--pw-border);border-radius:13px;overflow:hidden;background:#fff}.pw-ranking-title{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:13px;background:#f8fafc}.pw-ranking-title h5{margin:0;font-size:16px}.pw-ranking-title small{color:var(--pw-muted)}.pw-ranking-title>span{font-size:12px;font-weight:900;color:var(--pw-muted)}.pw-table-scroll{overflow:auto}.pw-ranking table{width:100%;border-collapse:collapse;min-width:620px}.pw-ranking th,.pw-ranking td{padding:10px 11px;border-top:1px solid var(--pw-border);text-align:left;font-size:13px}.pw-ranking th{background:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--pw-muted)}.pw-ranking-create{padding:12px;background:#f8fafc;border-radius:12px;margin-top:10px}.pw-ranking-create .pw-search{margin:0 0 8px}.pw-result-chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.pw-result-chips span{background:#f1f4f7;border-radius:999px;padding:6px 9px;font-size:12px}.pw-closed-meta{color:var(--pw-muted);font-size:12px;margin-top:10px}.pw-inline-box{padding:14px;background:#f8fafc;border-radius:12px;margin:12px 0}.pw-inline-box .pw-search{margin:0 0 8px}.pw-empty{padding:25px;text-align:center;background:#f8fafc;border-radius:12px;color:var(--pw-muted)}.pw-wide{grid-column:1/-1}.pw-notice{padding:15px;background:#fff1df;border-radius:12px}.pw-loading{padding:10px;color:var(--pw-muted)}.pw-error{padding:10px;color:var(--pw-danger);font-weight:800}.pw-bgg-credit{margin-top:14px;font-size:11px;color:var(--pw-muted)}
+.um-profile .um-profile-nav-item a[href*="profiletab=gracz"],.um-profile .um-profile-nav-item a[href*="/gracz/"]{color:#f28c00!important}.um-profile .um-profile-nav-item a[href*="profiletab=gracz"].active,.um-profile .um-profile-nav-item a[href*="/gracz/"].active{color:#f28c00!important}
+
+@media(max-width:700px){.pw-user-list{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.pw-gracz{padding:7px}.pw-head{padding:18px;align-items:flex-start}.pw-head h2{font-size:24px}.pw-bgg-mark{display:none}.pw-nav{grid-template-columns:1fr}.pw-game-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pw-section-head,.pw-ranking-head{flex-direction:column}.pw-tools{flex-direction:column;align-items:stretch}.pw-tools input{min-width:0}.pw-ranking-choice{flex-direction:column}.pw-user-list{grid-template-columns:1fr}.pw-card{padding:12px}.pw-result-list label{flex-wrap:wrap}.pw-points{margin-left:auto}.pw-check{margin-left:0}}
+
+
+/* Ultimate Member: Gracz profile tab */
+.um-profile-nav-item-gracz,
+.um-profile-nav-item[data-tab="gracz"],
+.um-profile-nav-item a[href*="profiletab=gracz"] {
+    color: #f47b20 !important;
+}
+.um-profile-nav-item-gracz a,
+.um-profile-nav-item[data-tab="gracz"] a {
+    color: #f47b20 !important;
+    font-weight: 700;
+}
+.um-profile-nav-item-gracz i,
+.um-profile-nav-item[data-tab="gracz"] i {
+    color: #f47b20 !important;
+}
+
+/* Lepsze kafelki biblioteki gier */
+.pw-game .pw-link{font-size:12px;line-height:1.25;text-align:left;margin-top:3px}
+.pw-game .pw-remove-game{color:#b42318}
+.pw-game .pw-enrich-game{color:#223c5c}
+.pw-game .pw-link:hover{text-decoration:underline}
+.pw-game-meta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:560px){
+  .pw-game-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .pw-game-body{padding:9px}
+  .pw-game-body strong{font-size:13px}
+}
+
+.pw-vote-help{margin:0 0 10px;color:var(--pw-muted);font-size:13px;line-height:1.45}.pw-selected-games{display:grid;gap:7px;margin:8px 0}.pw-selected-game{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fff;border:1px solid var(--pw-orange);border-radius:10px;padding:9px 11px;font-weight:800}.pw-selected-game button{border:0;background:#f1f4f7;border-radius:50%;width:28px;height:28px;font-size:18px;cursor:pointer}.pw-vote-box{margin-top:12px;background:#f8fafc;border-radius:12px;padding:12px}.pw-poll-options{display:grid;gap:8px;margin-top:9px}.pw-poll-option{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:10px;text-align:left;border:1px solid var(--pw-border);background:#fff;border-radius:11px;padding:7px;cursor:pointer;font:inherit}.pw-poll-option:hover{border-color:var(--pw-orange);background:#fffaf4}.pw-poll-option.selected{border-color:var(--pw-orange);box-shadow:0 0 0 2px rgba(255,157,24,.14);background:#fff7eb}.pw-poll-thumb{width:52px;height:62px;border-radius:7px;overflow:hidden;background:#eef1f4;display:flex;align-items:center;justify-content:center}.pw-poll-thumb img{width:100%;height:100%;object-fit:cover}.pw-poll-name{font-weight:900}.pw-poll-votes{font-size:12px;color:var(--pw-muted);white-space:nowrap}@media(max-width:600px){.pw-poll-option{grid-template-columns:44px 1fr}.pw-poll-thumb{width:44px;height:54px}.pw-poll-votes{grid-column:2}.pw-user-list{grid-template-columns:1fr 1fr}}
+
+
+/* Akcje właściciela głosowania */
+.pw-voting-owner-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:10px;border-top:1px solid var(--pw-border)}
+.pw-voting-owner-actions .pw-btn{flex:1 1 220px}
+.pw-voting-owner-actions .pw-delete-voting{background:#fff;border:1px solid #d99;color:#a22}
+.pw-voting-owner-actions .pw-delete-voting:hover{background:#fff5f5}
+@media(max-width:560px){.pw-voting-owner-actions{flex-direction:column}.pw-voting-owner-actions .pw-btn{width:100%}}
+
+
+/* 1.1.9 – mniejsze przyciski akcji głosowania */
+.pw-voting-owner-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+.pw-voting-owner-actions .pw-btn {
+    width: auto !important;
+    min-height: 34px !important;
+    padding: 7px 12px !important;
+    font-size: 12px !important;
+    line-height: 1.2 !important;
+}
+.pw-create-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.pw-create-actions .pw-btn {
+    flex: 1 1 220px;
+}
+.pw-btn-direct {
+    background: #17324f !important;
+}
+@media (max-width: 600px) {
+    .pw-create-actions {
+        flex-direction: column;
+    }
+    .pw-create-actions .pw-btn {
+        width: 100% !important;
+        flex: none;
+    }
+    .pw-voting-owner-actions {
+        flex-direction: column;
+    }
+    .pw-voting-owner-actions .pw-btn {
+        width: 100% !important;
+    }
+}
+
+/* 1.2.1 – poprawki UX: edycja wyników, rankingi i mobile */
+.pw-closed-results{margin-bottom:10px}
+.pw-edit-result{margin-top:10px!important;min-height:34px!important;padding:7px 12px!important;font-size:12px!important}
+.pw-edit-result-box{margin-top:10px;padding:12px;background:#f8fafc;border:1px solid var(--pw-border);border-radius:12px}
+.pw-edit-result-box .pw-btn{margin-top:10px}
+.pw-ranking-title-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.pw-ranking-title-actions .pw-link{font-size:11px;padding:4px 0}
+.pw-delete-ranking{color:#a22!important}
+.pw-delete-ranking:hover{color:#b42318!important}
+@media(max-width:600px){
+  .pw-voting-owner-actions{
+    flex-direction:row!important;
+    align-items:center;
+    flex-wrap:nowrap!important;
+    gap:6px!important;
+  }
+  .pw-voting-owner-actions .pw-btn{
+    width:auto!important;
+    min-width:0!important;
+    flex:1 1 0!important;
+    min-height:30px!important;
+    padding:6px 7px!important;
+    font-size:10px!important;
+    line-height:1.15!important;
+    white-space:normal!important;
+  }
+}
+
+/* pw-voting-live-122 */
+.pw-voting-players{margin-top:12px;padding:10px 12px;border-radius:12px;background:rgba(23,50,79,.05)}
+.pw-voting-players-title{font-weight:700;margin-bottom:7px}
+.pw-voter-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:3px 0}
+.pw-voter-avatar{width:27px;height:27px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:#f1f3f5;flex:0 0 27px}
+.pw-voter-name{font-weight:600;font-size:13px}
+.pw-voter-vote,.pw-voter-pending{margin-left:auto;font-size:12px}
+.pw-voter-pending{opacity:.62}
+@media(max-width:600px){.pw-voter-row{flex-wrap:wrap}.pw-voter-vote,.pw-voter-pending{margin-left:35px;width:calc(100% - 35px)}}
+
+/* 1.3.0 – biblioteka Planszowni: status wypożyczenia */
+.pw-loan-box{margin-top:9px;display:flex;flex-direction:column;gap:6px}
+.pw-loan-status{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
+.pw-loan-status i{width:9px;height:9px;border-radius:50%;display:inline-block;background:#22a06b}
+.pw-loan-borrowed i{background:#d92d20}
+.pw-loan-requested i{background:#f79009}
+.pw-loan-who{font-size:11px;opacity:.75}
+.pw-loan-request{align-self:flex-start;border:0;background:transparent;padding:2px 0;font-size:12px;font-weight:700;cursor:pointer;text-align:left}
+.pw-loan-request:hover{text-decoration:underline}
+.pw-nav-link{text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+
+/* 1.3.1 – wypożyczenia */
+.pw-loan-status{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
+.pw-loan-status i{width:9px;height:9px;border-radius:50%;display:inline-block;background:#22c55e}
+.pw-loan-requested i{background:#eab308}.pw-loan-borrowed i{background:#ef4444}.pw-loan-disabled i{background:#9ca3af}
+.pw-loan-box{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px}
+.pw-loan-who{font-size:12px;width:100%;opacity:.82}
+.pw-loan-request,.pw-loan-cancel{border:0;border-radius:8px;padding:6px 9px;font-size:12px;font-weight:700;cursor:pointer}
+.pw-loan-request{background:#f59e0b}.pw-loan-cancel{background:transparent;text-decoration:underline;padding-left:0}
+.pw-admin-loans-panel{margin-top:28px;padding-top:4px}
+.pw-admin-loans-head p,.pw-admin-loan-rules p{color:#646970}
+.pw-admin-loans-list{display:grid;gap:10px}
+.pw-admin-loan-card{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:14px;padding:13px 15px;border:1px solid #dcdcde;border-radius:10px;background:#fff}
+.pw-admin-loan-user{display:block;font-size:12px;color:#646970;margin-top:3px}
+.pw-loan-admin-badge{font-size:12px;font-weight:700}.is-requested{color:#9a6700}.is-borrowed{color:#b42318}
+.pw-admin-loan-actions{display:flex;gap:6px;flex-wrap:wrap}
+.pw-admin-loan-rules{margin:18px 0;padding:12px 14px;background:#f6f7f7;border-left:4px solid #f59e0b}
+.pw-admin-loan-games{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:7px}
+.pw-admin-loan-game{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 11px;border:1px solid #dcdcde;border-radius:8px;background:#fff}
+@media(max-width:700px){
+ .pw-admin-loan-card{grid-template-columns:1fr}
+ .pw-admin-loan-actions{width:100%}.pw-admin-loan-actions .button{flex:1}
+ .pw-admin-loan-game{font-size:12px}
+}
+
+/* 1.3.2 – ustawienie wypożyczenia bezpośrednio na kafelku gry */
+.pw-admin-loan-tile{margin-top:8px;padding:7px 9px;border-radius:10px;display:flex;align-items:center;gap:8px;border:1px solid #e5e7eb;font-size:12px;font-weight:700;background:#fff}
+.pw-admin-loan-tile.is-on{border-color:#bbf7d0;background:#f0fdf4}.pw-admin-loan-tile.is-off{border-color:#fecaca;background:#fef2f2}
+.pw-admin-loan-dot{width:9px;height:9px;border-radius:50%;background:#22c55e;flex:0 0 9px}.pw-admin-loan-tile.is-off .pw-admin-loan-dot{background:#ef4444}
+.pw-admin-loan-label{flex:1}.pw-admin-switch{position:relative;display:inline-block;width:38px;height:21px;flex:0 0 38px}.pw-admin-switch input{opacity:0;width:0;height:0}
+.pw-admin-switch span{position:absolute;inset:0;border-radius:999px;background:#d1d5db;cursor:pointer;transition:.18s}.pw-admin-switch span:before{content:"";position:absolute;width:17px;height:17px;left:2px;top:2px;border-radius:50%;background:#fff;transition:.18s}
+.pw-admin-switch input:checked+span{background:#f59e0b}.pw-admin-switch input:checked+span:before{transform:translateX(17px)}
+
+.pw-loan-savebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 16px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:10px;background:#f8fafc;font-size:12px}
+.pw-loan-savebar>span:first-child{flex:1;min-width:220px}
+.pw-profile-admin-loans{margin-top:20px}
+.pw-profile-admin-loans .pw-admin-loans-panel{margin-top:0}
+@media(max-width:700px){.pw-loan-savebar{align-items:stretch}.pw-loan-savebar .pw-btn{width:100%}}
+
+.pw-msg.is-ok{color:#16803c!important;font-weight:700}.pw-msg.is-error{color:#b42318!important;font-weight:700}
+.pw-loan-savebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pw-loan-savebar .pw-msg{margin-left:4px}
+@media(max-width:700px){.pw-loan-savebar .pw-btn{width:100%}.pw-loan-savebar{align-items:stretch}}
+
+/* 1.3.5 – dedicated admin loan panel */
+.pw-admin-nav{font-weight:800!important}
+.pw-admin-loans-panel{background:#fff;border-radius:14px;padding:16px;box-sizing:border-box}
+.pw-admin-loan-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#fff}
+.pw-admin-loan-card>div:first-child{display:flex;flex-direction:column;gap:4px}.pw-admin-loan-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:700px){.pw-admin-loan-card{grid-template-columns:1fr}.pw-admin-loan-actions{justify-content:flex-start}.pw-admin-loan-actions button{font-size:12px!important;padding:6px 9px!important}}
+
+/* 1.3.6 – wypożyczenia: panel gracza i admina */
+.pw-my-loans-list{display:grid;gap:10px}.pw-my-loan-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#fff}.pw-my-loan-row strong{flex:1;min-width:180px}.pw-my-loan-status{font-size:13px;font-weight:700}.pw-my-loan-status.requested{color:#a16207}.pw-my-loan-status.borrowed{color:#b91c1c}.pw-my-loan-status.rejected{color:#6b7280}.pw-my-loan-status.returned{color:#15803d}
+.pw-admin-loan-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.pw-admin-loan-card{padding:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff}.pw-admin-loan-user{display:block;margin-top:3px;font-size:13px;opacity:.8}
+@media(max-width:700px){.pw-admin-loan-actions .pw-btn{width:auto!important;min-height:38px;padding:8px 12px;font-size:13px}.pw-my-loan-row{align-items:flex-start}.pw-my-loan-row .pw-btn{width:100%}}
 
