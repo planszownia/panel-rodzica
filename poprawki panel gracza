@@ -1,0 +1,3481 @@
+/**
+ * Planszownia Gracz 1.5.2
+ * Jednorazowe czyszczenie MOJEJ kolekcji gier
+ * Nie usuwa gier z biblioteki Planszowni ani innych użytkowników.
+ */
+
+add_action('admin_post_pw_clear_my_game_collection', function () {
+
+    // Tylko administrator
+    if (!is_user_logged_in() || !current_user_can('manage_options')) {
+        wp_die('Brak uprawnień.');
+    }
+
+    // Zabezpieczenie
+    if (
+        !isset($_POST['pw_clear_collection_nonce']) ||
+        !wp_verify_nonce(
+            $_POST['pw_clear_collection_nonce'],
+            'pw_clear_my_game_collection'
+        )
+    ) {
+        wp_die('Nieprawidłowe zabezpieczenie.');
+    }
+
+    global $wpdb;
+
+    $table = $wpdb->prefix . 'pw_player_games';
+    $user_id = get_current_user_id();
+
+    // USUWAMY TYLKO POWIĄZANIA GIER Z TWOJĄ KOLEKCJĄ
+    $deleted = $wpdb->delete(
+        $table,
+        array(
+            'user_id' => $user_id
+        ),
+        array('%d')
+    );
+
+    // Powrót do panelu administracyjnego
+    $redirect = wp_get_referer();
+
+    if (!$redirect) {
+        $redirect = admin_url();
+    }
+
+    $redirect = add_query_arg(
+        'pw_collection_cleared',
+        (int) $deleted,
+        $redirect
+    );
+
+    wp_safe_redirect($redirect);
+    exit;
+});
+
+
+/**
+ * Tymczasowy przycisk w panelu administracyjnym.
+ */
+add_action('admin_notices', function () {
+
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    $screen = get_current_screen();
+
+    if (!$screen) {
+        return;
+    }
+
+    ?>
+    <div class="notice notice-warning">
+        <p>
+            <strong>Planszownia Gracz – czyszczenie mojej kolekcji</strong>
+        </p>
+
+        <form method="post"
+              action="<?php echo esc_url(admin_url('admin-post.php')); ?>"
+              onsubmit="return confirm('Czy na pewno chcesz usunąć WSZYSTKIE gry z MOJEJ kolekcji? Biblioteka Planszowni i kolekcje innych graczy pozostaną bez zmian.');">
+
+            <input type="hidden"
+                   name="action"
+                   value="pw_clear_my_game_collection">
+
+            <?php
+            wp_nonce_field(
+                'pw_clear_my_game_collection',
+                'pw_clear_collection_nonce'
+            );
+            ?>
+
+            <button type="submit" class="button button-secondary">
+                🗑️ Wyczyść moją kolekcję gier
+            </button>
+        </form>
+    </div>
+    <?php
+});
+
+
+/**
+ * Informacja po wykonaniu.
+ */
+add_action('admin_notices', function () {
+
+    if (!isset($_GET['pw_collection_cleared'])) {
+        return;
+    }
+
+    $count = absint($_GET['pw_collection_cleared']);
+
+    echo '<div class="notice notice-success is-dismissible">';
+    echo '<p><strong>Gotowe.</strong> Usunięto ' . $count . ' gier z Twojej osobistej kolekcji.</p>';
+    echo '<p>Biblioteka Planszowni oraz kolekcje innych graczy nie zostały zmienione.</p>';
+    echo '</div>';
+});
+/**
+ * Planszownia Gracz 1.5.2
+ * Wyczyść tylko zsynchronizowaną kolekcję BGG użytkownika.
+ */
+
+add_action('wp_ajax_pw_clear_bgg_collection', function () {
+
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Musisz być zalogowany.');
+    }
+
+    if (
+        empty($_POST['nonce']) ||
+        !wp_verify_nonce(
+            sanitize_text_field(wp_unslash($_POST['nonce'])),
+            'pw_gracz'
+        )
+    ) {
+        wp_send_json_error('Błąd zabezpieczenia. Odśwież stronę.');
+    }
+
+    global $wpdb;
+
+    $table   = $wpdb->prefix . 'pw_player_games';
+    $user_id = get_current_user_id();
+
+    /*
+     * Usuwamy WYŁĄCZNIE:
+     * - aktualnego użytkownika
+     * - rekordy pochodzące z synchronizacji BGG
+     *
+     * Nie usuwamy niczego z pw_games.
+     */
+    $deleted = $wpdb->query(
+        $wpdb->prepare(
+            "DELETE FROM {$table}
+             WHERE user_id = %d
+             AND is_bgg_sync = 1",
+            $user_id
+        )
+    );
+
+    if ($deleted === false) {
+        wp_send_json_error('Nie udało się wyczyścić kolekcji BGG.');
+    }
+
+    wp_send_json_success([
+        'message' => 'Zsynchronizowana kolekcja BGG została wyczyszczona.',
+        'deleted' => (int) $deleted
+    ]);
+});
+
+
+/**
+ * Dodaje przycisk do „Moja biblioteka”.
+ * Przycisk pojawia się tylko na własnym profilu.
+ */
+add_action('wp_footer', function () {
+
+    if (!is_user_logged_in()) {
+        return;
+    }
+
+    ?>
+    <script>
+    (function () {
+
+        function addBGGClearButton() {
+
+            const panel = document.querySelector(
+                '[data-pw-panel="moja"]'
+            );
+
+            if (!panel) {
+                return;
+            }
+
+            /*
+             * Jeżeli nie ma pola nazwy BGG,
+             * oglądamy cudzy profil — nic nie dodajemy.
+             */
+            if (!panel.querySelector('#pw-bgg-username')) {
+                return;
+            }
+
+            /*
+             * Nie dodawaj przycisku drugi raz.
+             */
+            if (panel.querySelector('#pw-clear-bgg-collection-box')) {
+                return;
+            }
+
+            const card = panel.querySelector('.pw-card');
+
+            if (!card) {
+                return;
+            }
+
+            const box = document.createElement('div');
+
+            box.id = 'pw-clear-bgg-collection-box';
+            box.style.marginTop = '16px';
+            box.style.paddingTop = '12px';
+            box.style.borderTop = '1px solid rgba(0,0,0,.08)';
+
+            box.innerHTML = `
+                <button
+                    type="button"
+                    class="pw-btn pw-btn-light"
+                    id="pw-clear-bgg-collection">
+                    🗑️ Wyczyść zsynchronizowaną kolekcję BGG
+                </button>
+
+                <span
+                    id="pw-clear-bgg-msg"
+                    class="pw-msg"
+                    style="margin-left:10px;">
+                </span>
+            `;
+
+            card.appendChild(box);
+
+            const button = box.querySelector(
+                '#pw-clear-bgg-collection'
+            );
+
+            button.addEventListener('click', function () {
+
+                const confirmed = window.confirm(
+                    'Czy na pewno chcesz wyczyścić zsynchronizowaną kolekcję BGG?\\n\\n' +
+                    'Usunięte zostaną tylko gry pobrane przez synchronizację BGG.\\n\\n' +
+                    'Biblioteka Planszowni, kolekcje innych graczy oraz gry dodane ręcznie pozostaną bez zmian.'
+                );
+
+                if (!confirmed) {
+                    return;
+                }
+
+                button.disabled = true;
+                button.textContent = 'Czyszczenie...';
+
+                const data = new URLSearchParams();
+
+                data.append(
+                    'action',
+                    'pw_clear_bgg_collection'
+                );
+
+                data.append(
+                    'nonce',
+                    window.PWGracz && PWGracz.nonce
+                        ? PWGracz.nonce
+                        : ''
+                );
+
+                fetch(
+                    window.PWGracz && PWGracz.ajax
+                        ? PWGracz.ajax
+                        : '<?php echo esc_url(admin_url('admin-ajax.php')); ?>',
+                    {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type':
+                                'application/x-www-form-urlencoded; charset=UTF-8'
+                        },
+                        body: data.toString()
+                    }
+                )
+                .then(function (response) {
+                    return response.json();
+                })
+                .then(function (result) {
+
+                    if (result.success) {
+
+                        const deleted =
+                            result.data && result.data.deleted
+                                ? result.data.deleted
+                                : 0;
+
+                        const msg =
+                            document.querySelector(
+                                '#pw-clear-bgg-msg'
+                            );
+
+                        if (msg) {
+                            msg.textContent =
+                                '✓ Usunięto ' + deleted + ' gier.';
+                            msg.classList.add('is-ok');
+                        }
+
+                        /*
+                         * Odświeżamy tylko panel „Moja biblioteka”.
+                         */
+                        if (
+                            typeof window.pwRefreshPanel ===
+                            'function'
+                        ) {
+                            window.pwRefreshPanel('moja');
+                        } else {
+                            window.location.reload();
+                        }
+
+                    } else {
+
+                        alert(
+                            result.data ||
+                            'Nie udało się wyczyścić kolekcji BGG.'
+                        );
+
+                        button.disabled = false;
+                        button.textContent =
+                            '🗑️ Wyczyść zsynchronizowaną kolekcję BGG';
+                    }
+
+                })
+                .catch(function () {
+
+                    alert(
+                        'Wystąpił błąd połączenia. Spróbuj ponownie.'
+                    );
+
+                    button.disabled = false;
+                    button.textContent =
+                        '🗑️ Wyczyść zsynchronizowaną kolekcję BGG';
+                });
+            });
+        }
+
+
+        /*
+         * Panel „Moja biblioteka” jest odświeżany AJAX-em,
+         * dlatego obserwujemy zmiany i w razie potrzeby
+         * ponownie dodajemy przycisk.
+         */
+        document.addEventListener(
+            'DOMContentLoaded',
+            function () {
+
+                addBGGClearButton();
+
+                const observer =
+                    new MutationObserver(function () {
+                        addBGGClearButton();
+                    });
+
+                observer.observe(
+                    document.body,
+                    {
+                        childList: true,
+                        subtree: true
+                    }
+                );
+            }
+        );
+
+    })();
+    </script>
+    <?php
+});
+/**
+ * Planszownia Gracz 1.5.2
+ * Naprawa przycisku „Chcę wypożyczyć”.
+ * Nie zmienia bazy ani istniejącego mechanizmu wypożyczeń.
+ */
+
+add_action('wp_footer', function () {
+
+    if (!is_user_logged_in() || current_user_can('manage_options')) {
+        return;
+    }
+
+    ?>
+    <script>
+    (function () {
+
+        document.addEventListener('click', function (e) {
+
+            const button = e.target.closest('.pw-loan-request');
+
+            if (!button) {
+                return;
+            }
+
+            /*
+             * Przejmujemy kliknięcie przed istniejącym
+             * handlerem jQuery w gracz.js.
+             */
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            const gameId = parseInt(
+                button.getAttribute('data-game'),
+                10
+            );
+
+            if (!gameId) {
+                alert('Nie znaleziono gry.');
+                return;
+            }
+
+            if (
+                !window.PWGracz ||
+                !PWGracz.ajax ||
+                !PWGracz.nonce
+            ) {
+                alert('Nie udało się połączyć z panelem Gracza.');
+                return;
+            }
+
+            const box = button.closest('.pw-loan-box');
+
+            button.disabled = true;
+            button.textContent = 'Wysyłanie…';
+
+            const data = new URLSearchParams();
+
+            data.append('action', 'pw_request_loan');
+            data.append('game', gameId);
+            data.append('nonce', PWGracz.nonce);
+
+            fetch(PWGracz.ajax, {
+                method: 'POST',
+                headers: {
+                    'Content-Type':
+                        'application/x-www-form-urlencoded; charset=UTF-8'
+                },
+                body: data.toString()
+            })
+            .then(function (response) {
+                return response.json();
+            })
+            .then(function (result) {
+
+                if (result && result.success) {
+
+                    if (box) {
+                        box.innerHTML =
+                            '<span class="pw-loan-status pw-loan-requested">' +
+                                '<i></i> Zarezerwowana — oczekuje na decyzję' +
+                            '</span>' +
+                            '<span class="pw-loan-who">' +
+                                '✓ Twoja prośba została wysłana do Planszowni.' +
+                            '</span>' +
+                            '<button type="button" ' +
+                                'class="pw-loan-cancel" ' +
+                                'data-loan="' +
+                                    parseInt(result.data.loan, 10) +
+                                '" ' +
+                                'data-game="' +
+                                    gameId +
+                                '">' +
+                                'Anuluj prośbę' +
+                            '</button>';
+                    } else {
+                        alert(
+                            result.data && result.data.message
+                                ? result.data.message
+                                : 'Prośba została wysłana.'
+                        );
+                    }
+
+                    /*
+                     * Odświeżamy panel wypożyczeń użytkownika,
+                     * jeżeli funkcja istnieje w 1.5.2.
+                     */
+                    if (
+                        typeof window.pwRefreshLoanStatuses ===
+                        'function'
+                    ) {
+                        window.pwRefreshLoanStatuses();
+                    }
+
+                } else {
+
+                    let message =
+                        'Nie udało się wysłać prośby o wypożyczenie.';
+
+                    if (result && result.data) {
+                        message = result.data;
+                    }
+
+                    alert(message);
+
+                    button.disabled = false;
+                    button.textContent =
+                        '📦 Chcę wypożyczyć';
+                }
+            })
+            .catch(function (error) {
+
+                console.error(
+                    'Planszownia Gracz – wypożyczenie:',
+                    error
+                );
+
+                alert(
+                    'Wystąpił błąd połączenia z serwerem.'
+                );
+
+                button.disabled = false;
+                button.textContent =
+                    '📦 Chcę wypożyczyć';
+            });
+
+        }, true);
+
+    })();
+    </script>
+    <?php
+});
+
+
+/**
+ * Planszownia Gracz 1.5.2
+ * Naprawa przycisku „Anuluj prośbę”.
+ */
+
+add_action('wp_footer', function () {
+
+    if (!is_user_logged_in()) {
+        return;
+    }
+
+    ?>
+    <script>
+    (function () {
+
+        document.addEventListener('click', function (e) {
+
+            const button = e.target.closest('.pw-loan-cancel');
+
+            if (!button) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            const loan = parseInt(
+                button.getAttribute('data-loan'),
+                10
+            );
+
+            if (!loan) {
+                alert('Nie znaleziono zgłoszenia.');
+                return;
+            }
+
+            if (!window.PWGraczLoanAjax) {
+                alert('Nie udało się połączyć z modułem wypożyczeń.');
+                return;
+            }
+
+            if (!confirm(
+                'Czy na pewno chcesz anulować prośbę o wypożyczenie?'
+            )) {
+                return;
+            }
+
+            const originalText = button.textContent;
+
+            button.disabled = true;
+            button.textContent = 'Anulowanie…';
+
+            window.PWGraczLoanAjax({
+                action: 'pw_cancel_loan',
+                loan: loan
+            })
+            .done(function (result) {
+
+                if (result && result.success) {
+
+                    /*
+                     * Jeżeli przycisk znajduje się przy karcie gry,
+                     * natychmiast pokazujemy ponownie możliwość
+                     * wypożyczenia.
+                     */
+                    const box =
+                        button.closest('.pw-loan-box');
+
+                    if (box) {
+
+                        const game =
+                            box.getAttribute('data-game') ||
+                            button.getAttribute('data-game');
+
+                        if (game) {
+
+                            box.innerHTML =
+                                '<span class="pw-loan-status pw-loan-available">' +
+                                    '<i></i> Dostępna w klubie' +
+                                '</span>' +
+                                '<button type="button" ' +
+                                    'class="pw-loan-request" ' +
+                                    'data-game="' +
+                                        parseInt(game, 10) +
+                                    '">' +
+                                    '📦 Chcę wypożyczyć' +
+                                '</button>';
+                        }
+                    }
+
+                    /*
+                     * Odświeżamy „Moje wypożyczenia”.
+                     */
+                    if (
+                        typeof window.pwRefreshLoanStatuses ===
+                        'function'
+                    ) {
+                        window.pwRefreshLoanStatuses();
+                    }
+
+                    /*
+                     * Jeżeli jesteśmy w panelu „Moje wypożyczenia”,
+                     * odświeżamy go bez opuszczania profilu.
+                     */
+                    if (
+                        typeof window.pwRefreshPanel ===
+                        'function'
+                    ) {
+                        window.pwRefreshPanel(
+                            'moje-wypozyczenia'
+                        );
+                    }
+
+                    if (
+                        result.data &&
+                        result.data.message
+                    ) {
+                        if (typeof window.pwToast === 'function') {
+                            window.pwToast(
+                                result.data.message
+                            );
+                        }
+                    }
+
+                } else {
+
+                    alert(
+                        result && result.data
+                            ? result.data
+                            : 'Nie udało się anulować prośby.'
+                    );
+
+                    button.disabled = false;
+                    button.textContent = originalText;
+                }
+
+            })
+            .fail(function (xhr) {
+
+                let message =
+                    'Błąd połączenia z serwerem.';
+
+                try {
+                    if (
+                        xhr.responseJSON &&
+                        xhr.responseJSON.data
+                    ) {
+                        message =
+                            xhr.responseJSON.data;
+                    }
+                } catch (error) {}
+
+                alert(message);
+
+                button.disabled = false;
+                button.textContent = originalText;
+            });
+
+        }, true);
+
+    })();
+    </script>
+    <?php
+});
+/**
+ * Planszownia Gracz 1.5.2
+ * Pełna obsługa przycisków wypożyczalni:
+ *
+ * - Anuluj prośbę
+ * - Wyślij wiadomość
+ * - Zatwierdź
+ * - Odrzuć
+ * - Poproś o zwrot
+ * - Potwierdź zwrot
+ *
+ * Nie ingeruje w Strefę Rodzica.
+ */
+
+add_action('wp_footer', function () {
+
+    if (!is_user_logged_in()) {
+        return;
+    }
+
+    ?>
+    <script>
+    (function () {
+
+        /*
+         * Uniwersalne wysłanie AJAX do istniejącego
+         * mechanizmu Planszownia Gracz 1.5.2.
+         */
+        function pwLoanRequest(data) {
+
+            return fetch(
+                window.PWGracz && PWGracz.ajax
+                    ? PWGracz.ajax
+                    : '<?php echo esc_url(admin_url('admin-ajax.php')); ?>',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type':
+                            'application/x-www-form-urlencoded; charset=UTF-8'
+                    },
+                    body: new URLSearchParams(data).toString()
+                }
+            ).then(function (response) {
+                return response.json();
+            });
+        }
+
+
+        /*
+         * =========================================================
+         * GRACZ — ANULUJ PROŚBĘ
+         * =========================================================
+         */
+
+        document.addEventListener('click', function (e) {
+
+            const button =
+                e.target.closest('.pw-loan-cancel');
+
+            if (!button) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            const loan =
+                parseInt(
+                    button.getAttribute('data-loan'),
+                    10
+                );
+
+            if (!loan) {
+                alert('Nie znaleziono wypożyczenia.');
+                return;
+            }
+
+            if (!confirm(
+                'Czy na pewno chcesz anulować prośbę o wypożyczenie?'
+            )) {
+                return;
+            }
+
+            const original =
+                button.textContent;
+
+            button.disabled = true;
+            button.textContent = 'Anulowanie…';
+
+            pwLoanRequest({
+                action: 'pw_cancel_loan',
+                loan: loan,
+                nonce:
+                    window.PWGracz
+                        ? PWGracz.nonce
+                        : ''
+            })
+            .then(function (result) {
+
+                if (!result.success) {
+
+                    throw new Error(
+                        result.data ||
+                        'Nie udało się anulować prośby.'
+                    );
+                }
+
+                /*
+                 * Odświeżamy stronę/panel.
+                 * Dzięki temu gra ponownie pokaże
+                 * możliwość wypożyczenia.
+                 */
+                window.location.reload();
+
+            })
+            .catch(function (error) {
+
+                alert(error.message);
+
+                button.disabled = false;
+                button.textContent = original;
+            });
+
+        }, true);
+
+
+        /*
+         * =========================================================
+         * ADMIN — ZATWIERDŹ / ODRZUĆ / POPROŚ O ZWROT /
+         *         POTWIERDŹ ZWROT
+         * =========================================================
+         */
+
+        document.addEventListener('click', function (e) {
+
+            const button =
+                e.target.closest('.pw-admin-loan');
+
+            if (!button) {
+                return;
+            }
+
+            const action =
+                button.getAttribute('data-do');
+
+            /*
+             * Obsługujemy wszystkie cztery akcje tutaj.
+             */
+            if (
+                action !== 'approve' &&
+                action !== 'reject' &&
+                action !== 'ask_return' &&
+                action !== 'return'
+            ) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            const loan =
+                parseInt(
+                    button.getAttribute('data-loan'),
+                    10
+                );
+
+            if (!loan) {
+                alert('Nie znaleziono wypożyczenia.');
+                return;
+            }
+
+            let message = '';
+
+            /*
+             * -----------------------------------------------------
+             * ZATWIERDZENIE
+             * -----------------------------------------------------
+             */
+
+            if (action === 'approve') {
+
+                message = window.prompt(
+                    'Wiadomość dla gracza po zatwierdzeniu wypożyczenia (opcjonalnie):',
+                    ''
+                );
+
+                if (message === null) {
+                    return;
+                }
+            }
+
+
+            /*
+             * -----------------------------------------------------
+             * ODRZUCENIE
+             * -----------------------------------------------------
+             */
+
+            if (action === 'reject') {
+
+                message = window.prompt(
+                    'Powód / wiadomość dla gracza (opcjonalnie):',
+                    ''
+                );
+
+                if (message === null) {
+                    return;
+                }
+            }
+
+
+            /*
+             * -----------------------------------------------------
+             * PROŚBA O ZWROT
+             * -----------------------------------------------------
+             */
+
+            if (action === 'ask_return') {
+
+                message = window.prompt(
+                    'Wiadomość z prośbą o zwrot gry (opcjonalnie):',
+                    'Przypominamy o zwrocie wypożyczonej gry. Prosimy o jej zwrot do Planszowni.'
+                );
+
+                if (message === null) {
+                    return;
+                }
+            }
+
+
+            /*
+             * -----------------------------------------------------
+             * POTWIERDZENIE ZWROTU
+             * -----------------------------------------------------
+             */
+
+            if (action === 'return') {
+
+                if (!confirm(
+                    'Czy potwierdzasz, że gra została zwrócona do Planszowni?'
+                )) {
+                    return;
+                }
+            }
+
+
+            /*
+             * Potwierdzenie wykonania operacji.
+             */
+            let confirmation = '';
+
+            if (action === 'approve') {
+                confirmation =
+                    'Czy zatwierdzić to wypożyczenie?';
+
+            } else if (action === 'reject') {
+                confirmation =
+                    'Czy odrzucić tę prośbę?';
+
+            } else if (action === 'ask_return') {
+                confirmation =
+                    'Czy wysłać graczowi prośbę o zwrot gry?';
+
+            } else if (action === 'return') {
+                confirmation =
+                    'Czy potwierdzasz zwrot gry?';
+            }
+
+            if (
+                confirmation &&
+                !confirm(confirmation)
+            ) {
+                return;
+            }
+
+
+            const original =
+                button.textContent;
+
+            button.disabled = true;
+            button.textContent = 'Zapisywanie…';
+
+
+            /*
+             * Wysyłamy do istniejącego AJAX-a 1.5.2.
+             */
+            pwLoanRequest({
+
+                action: 'pw_loan_action',
+
+                loan: loan,
+
+                'do': action,
+
+                message: message,
+
+                reason: message,
+
+                nonce:
+                    window.PWGracz
+                        ? PWGracz.nonce
+                        : ''
+
+            })
+            .then(function (result) {
+
+                if (!result.success) {
+
+                    throw new Error(
+                        result.data ||
+                        'Nie udało się wykonać operacji.'
+                    );
+                }
+
+                /*
+                 * Sukces.
+                 *
+                 * Odświeżamy panel wypożyczalni.
+                 */
+                window.location.reload();
+
+            })
+            .catch(function (error) {
+
+                alert(error.message);
+
+                button.disabled = false;
+                button.textContent = original;
+            });
+
+        }, true);
+
+
+        /*
+         * =========================================================
+         * ADMIN — WYŚLIJ WIADOMOŚĆ
+         * =========================================================
+         *
+         * Obsługujemy kilka możliwych nazw klas przycisku,
+         * żeby pasowało do obecnego panelu 1.5.2.
+         */
+
+        document.addEventListener('click', function (e) {
+
+            const button =
+                e.target.closest(
+                    '.pw-loan-message-send, .pw-admin-loan-message, [data-loan-message-send]'
+                );
+
+            if (!button) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            let loan =
+                parseInt(
+                    button.getAttribute('data-loan'),
+                    10
+                );
+
+            /*
+             * Jeżeli przycisk nie ma data-loan,
+             * szukamy go w najbliższej karcie wypożyczenia.
+             */
+            const card =
+                button.closest(
+                    '.pw-loan-card, .pw-loan-item, .pw-admin-loan-card'
+                );
+
+            if (!loan && card) {
+
+                loan =
+                    parseInt(
+                        card.getAttribute('data-loan'),
+                        10
+                    );
+            }
+
+            if (!loan) {
+                alert('Nie znaleziono wypożyczenia.');
+                return;
+            }
+
+            /*
+             * Szukamy pola wiadomości.
+             */
+            let textarea = null;
+
+            if (card) {
+                textarea =
+                    card.querySelector(
+                        'textarea[name="message"], textarea.pw-loan-message, textarea'
+                    );
+            }
+
+            if (!textarea) {
+                textarea =
+                    document.querySelector(
+                        'textarea[data-loan="' +
+                        loan +
+                        '"]'
+                    );
+            }
+
+            if (!textarea) {
+                alert('Nie znaleziono pola wiadomości.');
+                return;
+            }
+
+            const message =
+                textarea.value.trim();
+
+            if (!message) {
+                alert(
+                    'Wpisz wiadomość przed wysłaniem.'
+                );
+                textarea.focus();
+                return;
+            }
+
+            if (!confirm(
+                'Czy wysłać tę wiadomość do gracza?'
+            )) {
+                return;
+            }
+
+            const original =
+                button.textContent;
+
+            button.disabled = true;
+            button.textContent = 'Wysyłanie…';
+
+
+            pwLoanRequest({
+
+                action: 'pw_loan_message',
+
+                loan: loan,
+
+                message: message,
+
+                nonce:
+                    window.PWGracz
+                        ? PWGracz.nonce
+                        : ''
+
+            })
+            .then(function (result) {
+
+                if (!result.success) {
+
+                    throw new Error(
+                        result.data ||
+                        'Nie udało się wysłać wiadomości.'
+                    );
+                }
+
+                textarea.value = '';
+
+                alert(
+                    result.data &&
+                    result.data.message
+                        ? result.data.message
+                        : 'Wiadomość została wysłana.'
+                );
+
+                button.disabled = false;
+                button.textContent = original;
+
+            })
+            .catch(function (error) {
+
+                alert(error.message);
+
+                button.disabled = false;
+                button.textContent = original;
+            });
+
+        }, true);
+
+    })();
+    </script>
+    <?php
+});
+/**
+ * Planszownia Gracz 1.5.2
+ * Wypożyczalnia — historia + wiadomości administratora
+ *
+ * Działa niezależnie od istniejących fragmentów.
+ * Nie ingeruje w Strefę Rodzica.
+ */
+
+
+/* ============================================================
+ * 1. TABELA HISTORII WIADOMOŚCI
+ * ============================================================ */
+
+function pw152_loan_history_install() {
+
+    global $wpdb;
+
+    $table = $wpdb->prefix . 'pw_loan_messages';
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+    $charset = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE {$table} (
+        id bigint unsigned NOT NULL AUTO_INCREMENT,
+        loan_id bigint unsigned NOT NULL,
+        admin_user_id bigint unsigned NOT NULL,
+        message text NOT NULL,
+        message_type varchar(30) NOT NULL DEFAULT 'message',
+        created_at datetime NOT NULL,
+        PRIMARY KEY  (id),
+        KEY loan_id (loan_id),
+        KEY created_at (created_at)
+    ) {$charset};";
+
+    dbDelta($sql);
+}
+
+add_action('init', 'pw152_loan_history_install');
+
+
+/* ============================================================
+ * 2. ZAPIS WIADOMOŚCI
+ * ============================================================ */
+
+function pw152_loan_history_add(
+    $loan_id,
+    $message,
+    $type = 'message'
+) {
+
+    global $wpdb;
+
+    $message = trim((string) $message);
+
+    if ($message === '') {
+        return;
+    }
+
+    $table = $wpdb->prefix . 'pw_loan_messages';
+
+    $wpdb->insert(
+        $table,
+        array(
+            'loan_id'       => absint($loan_id),
+            'admin_user_id' => get_current_user_id(),
+            'message'       => $message,
+            'message_type'  => sanitize_key($type),
+            'created_at'    => current_time('mysql'),
+        ),
+        array(
+            '%d',
+            '%d',
+            '%s',
+            '%s',
+            '%s',
+        )
+    );
+}
+
+
+/* ============================================================
+ * 3. WSPÓLNE SPRAWDZENIE WYPOŻYCZENIA
+ * ============================================================ */
+
+function pw152_get_loan($loan_id) {
+
+    global $wpdb;
+
+    $table = $wpdb->prefix . 'pw_loans';
+
+    return $wpdb->get_row(
+        $wpdb->prepare(
+            "SELECT * FROM {$table} WHERE id = %d LIMIT 1",
+            absint($loan_id)
+        )
+    );
+}
+
+
+/* ============================================================
+ * 4. ADMIN — WIADOMOŚĆ DO GRACZA
+ * ============================================================ */
+
+add_action(
+    'wp_ajax_pw152_loan_message',
+    function () {
+
+        if (
+            !is_user_logged_in() ||
+            !current_user_can('manage_options')
+        ) {
+            wp_send_json_error(
+                'Brak uprawnień.'
+            );
+        }
+
+        if (
+            empty($_POST['nonce']) ||
+            !wp_verify_nonce(
+                sanitize_text_field(
+                    wp_unslash($_POST['nonce'])
+                ),
+                'pw_gracz'
+            )
+        ) {
+            wp_send_json_error(
+                'Błąd zabezpieczenia.'
+            );
+        }
+
+        $loan_id = absint(
+            $_POST['loan'] ?? 0
+        );
+
+        $message = sanitize_textarea_field(
+            wp_unslash(
+                $_POST['message'] ?? ''
+            )
+        );
+
+        if (!$loan_id) {
+            wp_send_json_error(
+                'Nie znaleziono wypożyczenia.'
+            );
+        }
+
+        if ($message === '') {
+            wp_send_json_error(
+                'Wpisz wiadomość.'
+            );
+        }
+
+        $loan = pw152_get_loan($loan_id);
+
+        if (!$loan) {
+            wp_send_json_error(
+                'Wypożyczenie nie istnieje.'
+            );
+        }
+
+        pw152_loan_history_add(
+            $loan_id,
+            $message,
+            'message'
+        );
+
+        /*
+         * Zachowujemy również ostatnią wiadomość
+         * w istniejącym polu decision_note.
+         */
+        global $wpdb;
+
+        $table = $wpdb->prefix . 'pw_loans';
+
+        $wpdb->update(
+            $table,
+            array(
+                'decision_note' => $message,
+            ),
+            array(
+                'id' => $loan_id,
+            ),
+            array('%s'),
+            array('%d')
+        );
+
+        wp_send_json_success(
+            array(
+                'message' =>
+                    'Wiadomość została wysłana do gracza.',
+            )
+        );
+    }
+);
+
+
+/* ============================================================
+ * 5. ADMIN — ZMIANA STATUSU WYPOŻYCZENIA
+ * ============================================================ */
+
+add_action(
+    'wp_ajax_pw152_loan_action',
+    function () {
+
+        if (
+            !is_user_logged_in() ||
+            !current_user_can('manage_options')
+        ) {
+            wp_send_json_error(
+                'Brak uprawnień.'
+            );
+        }
+
+        if (
+            empty($_POST['nonce']) ||
+            !wp_verify_nonce(
+                sanitize_text_field(
+                    wp_unslash($_POST['nonce'])
+                ),
+                'pw_gracz'
+            )
+        ) {
+            wp_send_json_error(
+                'Błąd zabezpieczenia.'
+            );
+        }
+
+        $loan_id = absint(
+            $_POST['loan'] ?? 0
+        );
+
+        $action = sanitize_key(
+            $_POST['loan_action'] ?? ''
+        );
+
+        $message = sanitize_textarea_field(
+            wp_unslash(
+                $_POST['message'] ?? ''
+            )
+        );
+
+        $loan = pw152_get_loan($loan_id);
+
+        if (!$loan) {
+            wp_send_json_error(
+                'Nie znaleziono wypożyczenia.'
+            );
+        }
+
+        global $wpdb;
+
+        $table = $wpdb->prefix . 'pw_loans';
+
+        /* -----------------------------------------
+         * ZATWIERDZENIE
+         * ----------------------------------------- */
+
+        if ($action === 'approve') {
+
+            if ($loan->status !== 'requested') {
+                wp_send_json_error(
+                    'To wypożyczenie nie oczekuje już na decyzję.'
+                );
+            }
+
+            $wpdb->update(
+                $table,
+                array(
+                    'status'        => 'borrowed',
+                    'approved_at'   => current_time('mysql'),
+                    'decision_note' =>
+                        $message,
+                ),
+                array(
+                    'id' => $loan_id,
+                ),
+                array(
+                    '%s',
+                    '%s',
+                    '%s',
+                ),
+                array('%d')
+            );
+
+            if ($message !== '') {
+
+                pw152_loan_history_add(
+                    $loan_id,
+                    $message,
+                    'approval'
+                );
+            }
+
+            wp_send_json_success(
+                array(
+                    'message' =>
+                        'Wypożyczenie zostało zatwierdzone.',
+                )
+            );
+        }
+
+
+        /* -----------------------------------------
+         * ODRZUCENIE
+         * ----------------------------------------- */
+
+        if ($action === 'reject') {
+
+            if ($loan->status !== 'requested') {
+                wp_send_json_error(
+                    'Ta prośba nie oczekuje już na decyzję.'
+                );
+            }
+
+            $wpdb->update(
+                $table,
+                array(
+                    'status' => 'rejected',
+                    'decision_note' =>
+                        $message,
+                ),
+                array(
+                    'id' => $loan_id,
+                ),
+                array(
+                    '%s',
+                    '%s',
+                ),
+                array('%d')
+            );
+
+            if ($message !== '') {
+
+                pw152_loan_history_add(
+                    $loan_id,
+                    $message,
+                    'rejection'
+                );
+            }
+
+            wp_send_json_success(
+                array(
+                    'message' =>
+                        'Prośba została odrzucona.',
+                )
+            );
+        }
+
+
+        /* -----------------------------------------
+         * PROŚBA O ZWROT
+         * ----------------------------------------- */
+
+        if ($action === 'ask_return') {
+
+            if ($loan->status !== 'borrowed') {
+                wp_send_json_error(
+                    'Ta gra nie jest obecnie wypożyczona.'
+                );
+            }
+
+            $wpdb->update(
+                $table,
+                array(
+                    'status' => 'return_requested',
+                    'decision_note' =>
+                        $message,
+                ),
+                array(
+                    'id' => $loan_id,
+                ),
+                array(
+                    '%s',
+                    '%s',
+                ),
+                array('%d')
+            );
+
+            if ($message !== '') {
+
+                pw152_loan_history_add(
+                    $loan_id,
+                    $message,
+                    'return_request'
+                );
+            }
+
+            wp_send_json_success(
+                array(
+                    'message' =>
+                        'Prośba o zwrot została wysłana.',
+                )
+            );
+        }
+
+
+        /* -----------------------------------------
+         * POTWIERDZENIE ZWROTU
+         * ----------------------------------------- */
+
+        if ($action === 'return') {
+
+            if (
+                $loan->status !== 'borrowed' &&
+                $loan->status !== 'return_requested'
+            ) {
+                wp_send_json_error(
+                    'To wypożyczenie nie jest aktywne.'
+                );
+            }
+
+            $wpdb->update(
+                $table,
+                array(
+                    'status'     => 'returned',
+                    'returned_at' =>
+                        current_time('mysql'),
+                ),
+                array(
+                    'id' => $loan_id,
+                ),
+                array(
+                    '%s',
+                    '%s',
+                ),
+                array('%d')
+            );
+
+            wp_send_json_success(
+                array(
+                    'message' =>
+                        'Zwrot gry został potwierdzony. Gra jest ponownie dostępna.',
+                )
+            );
+        }
+
+
+        wp_send_json_error(
+            'Nieznana operacja.'
+        );
+    }
+);
+
+
+/* ============================================================
+ * 6. ADMIN — HISTORIA WYPOŻYCZEŃ
+ * ============================================================ */
+
+add_action(
+    'wp_ajax_pw152_loan_history',
+    function () {
+
+        if (
+            !is_user_logged_in() ||
+            !current_user_can('manage_options')
+        ) {
+            wp_send_json_error(
+                'Brak uprawnień.'
+            );
+        }
+
+        global $wpdb;
+
+        $loans = $wpdb->prefix . 'pw_loans';
+        $games = $wpdb->prefix . 'pw_games';
+        $users = $wpdb->users;
+
+        $rows = $wpdb->get_results(
+            "
+            SELECT
+                l.*,
+                g.title AS game_title,
+                u.display_name AS player_name
+            FROM {$loans} l
+            LEFT JOIN {$games} g
+                ON g.id = l.game_id
+            LEFT JOIN {$users} u
+                ON u.ID = l.user_id
+            WHERE l.status IN ('returned','rejected')
+            ORDER BY
+                COALESCE(l.returned_at,l.requested_at) DESC,
+                l.id DESC
+            LIMIT 100
+            "
+        );
+
+        $messages_table =
+            $wpdb->prefix . 'pw_loan_messages';
+
+        ob_start();
+
+        ?>
+
+        <div id="pw152-admin-loan-history"
+             style="margin-top:24px;">
+
+            <h3 style="margin-bottom:14px;">
+                📚 HISTORIA WYPOŻYCZEŃ
+            </h3>
+
+            <?php if (empty($rows)) : ?>
+
+                <div class="pw-card">
+                    Brak zakończonych wypożyczeń.
+                </div>
+
+            <?php else : ?>
+
+                <?php foreach ($rows as $row) : ?>
+
+                    <?php
+
+                    $messages =
+                        $wpdb->get_results(
+                            $wpdb->prepare(
+                                "
+                                SELECT *
+                                FROM {$messages_table}
+                                WHERE loan_id = %d
+                                ORDER BY created_at ASC, id ASC
+                                ",
+                                $row->id
+                            )
+                        );
+
+                    ?>
+
+                    <div class="pw-card"
+                         style="margin-bottom:12px;">
+
+                        <strong>
+                            <?php
+                            echo esc_html(
+                                $row->game_title ?: 'Nieznana gra'
+                            );
+                            ?>
+                        </strong>
+
+                        <div style="margin-top:6px;">
+                            👤
+                            <?php
+                            echo esc_html(
+                                $row->player_name ?: 'Nieznany gracz'
+                            );
+                            ?>
+                        </div>
+
+                        <div style="margin-top:6px;">
+
+                            <?php if ($row->status === 'returned') : ?>
+
+                                <span>
+                                    🟢 ZWRÓCONA
+                                </span>
+
+                            <?php else : ?>
+
+                                <span>
+                                    ⚪ ODRZUCONA
+                                </span>
+
+                            <?php endif; ?>
+
+                        </div>
+
+                        <?php if ($row->requested_at) : ?>
+
+                            <div style="margin-top:5px;">
+                                Zgłoszenie:
+                                <?php
+                                echo esc_html(
+                                    mysql2date(
+                                        'd.m.Y H:i',
+                                        $row->requested_at
+                                    )
+                                );
+                                ?>
+                            </div>
+
+                        <?php endif; ?>
+
+                        <?php if ($row->approved_at) : ?>
+
+                            <div style="margin-top:5px;">
+                                Wypożyczono:
+                                <?php
+                                echo esc_html(
+                                    mysql2date(
+                                        'd.m.Y H:i',
+                                        $row->approved_at
+                                    )
+                                );
+                                ?>
+                            </div>
+
+                        <?php endif; ?>
+
+                        <?php if ($row->returned_at) : ?>
+
+                            <div style="margin-top:5px;">
+                                Zwrócono:
+                                <?php
+                                echo esc_html(
+                                    mysql2date(
+                                        'd.m.Y H:i',
+                                        $row->returned_at
+                                    )
+                                );
+                                ?>
+                            </div>
+
+                        <?php endif; ?>
+
+
+                        <?php if (!empty($messages)) : ?>
+
+                            <div style="
+                                margin-top:12px;
+                                padding-top:10px;
+                                border-top:1px solid #eee;
+                            ">
+
+                                <strong>
+                                    💬 Historia wiadomości
+                                </strong>
+
+                                <?php foreach ($messages as $msg) : ?>
+
+                                    <div style="
+                                        margin-top:8px;
+                                        padding:8px 10px;
+                                        background:#f7f7f7;
+                                        border-radius:8px;
+                                    ">
+
+                                        <div style="
+                                            font-size:12px;
+                                            opacity:.65;
+                                            margin-bottom:3px;
+                                        ">
+                                            <?php
+                                            echo esc_html(
+                                                mysql2date(
+                                                    'd.m.Y H:i',
+                                                    $msg->created_at
+                                                )
+                                            );
+                                            ?>
+                                        </div>
+
+                                        <?php
+                                        echo nl2br(
+                                            esc_html(
+                                                $msg->message
+                                            )
+                                        );
+                                        ?>
+
+                                    </div>
+
+                                <?php endforeach; ?>
+
+                            </div>
+
+                        <?php endif; ?>
+
+                    </div>
+
+                <?php endforeach; ?>
+
+            <?php endif; ?>
+
+        </div>
+
+        <?php
+
+        wp_send_json_success(
+            array(
+                'html' => ob_get_clean(),
+            )
+        );
+    }
+);
+
+
+/* ============================================================
+ * 7. JAVASCRIPT
+ * ============================================================ */
+
+add_action('wp_footer', function () {
+
+    if (!is_user_logged_in()) {
+        return;
+    }
+
+    ?>
+
+    <script>
+    (function () {
+
+        function pw152Ajax(data) {
+
+            data.nonce =
+                window.PWGracz
+                    ? PWGracz.nonce
+                    : '';
+
+            return fetch(
+                window.PWGracz && PWGracz.ajax
+                    ? PWGracz.ajax
+                    : '<?php echo esc_url(admin_url('admin-ajax.php')); ?>',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type':
+                            'application/x-www-form-urlencoded; charset=UTF-8'
+                    },
+                    body:
+                        new URLSearchParams(data).toString()
+                }
+            ).then(function (r) {
+                return r.json();
+            });
+        }
+
+
+        /* ========================================================
+         * GRACZ — ANULUJ PROŚBĘ
+         * ======================================================== */
+
+        document.addEventListener(
+            'click',
+            function (e) {
+
+                const button =
+                    e.target.closest('.pw-loan-cancel');
+
+                if (!button) {
+                    return;
+                }
+
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                const loan =
+                    parseInt(
+                        button.getAttribute('data-loan'),
+                        10
+                    );
+
+                if (!loan) {
+                    alert(
+                        'Nie znaleziono wypożyczenia.'
+                    );
+                    return;
+                }
+
+                if (!confirm(
+                    'Czy na pewno chcesz anulować prośbę o wypożyczenie?'
+                )) {
+                    return;
+                }
+
+                button.disabled = true;
+                button.textContent =
+                    'Anulowanie…';
+
+                pw152Ajax({
+                    action:
+                        'pw_cancel_loan',
+                    loan:
+                        loan
+                })
+                .then(function (result) {
+
+                    if (!result.success) {
+                        throw new Error(
+                            result.data ||
+                            'Nie udało się anulować prośby.'
+                        );
+                    }
+
+                    window.location.reload();
+
+                })
+                .catch(function (error) {
+
+                    alert(error.message);
+
+                    button.disabled = false;
+                    button.textContent =
+                        'Anuluj prośbę';
+                });
+
+            },
+            true
+        );
+
+
+        /* ========================================================
+         * ADMIN — AKCJE WYPOŻYCZENIA
+         * ======================================================== */
+
+        document.addEventListener(
+            'click',
+            function (e) {
+
+                const button =
+                    e.target.closest(
+                        '.pw-admin-loan'
+                    );
+
+                if (!button) {
+                    return;
+                }
+
+                const action =
+                    button.getAttribute(
+                        'data-do'
+                    );
+
+                if (
+                    action !== 'approve' &&
+                    action !== 'reject' &&
+                    action !== 'ask_return' &&
+                    action !== 'return'
+                ) {
+                    return;
+                }
+
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                const loan =
+                    parseInt(
+                        button.getAttribute(
+                            'data-loan'
+                        ),
+                        10
+                    );
+
+                if (!loan) {
+                    alert(
+                        'Nie znaleziono wypożyczenia.'
+                    );
+                    return;
+                }
+
+                let message = '';
+
+                if (
+                    action === 'approve' ||
+                    action === 'reject'
+                ) {
+
+                    message =
+                        window.prompt(
+                            action === 'approve'
+                                ? 'Wiadomość dla gracza po akceptacji (opcjonalnie):'
+                                : 'Wiadomość / powód odmowy (opcjonalnie):',
+                            ''
+                        );
+
+                    if (message === null) {
+                        return;
+                    }
+                }
+
+                if (action === 'ask_return') {
+
+                    message =
+                        window.prompt(
+                            'Wiadomość z prośbą o zwrot (opcjonalnie):',
+                            'Przypominamy o zwrocie wypożyczonej gry.'
+                        );
+
+                    if (message === null) {
+                        return;
+                    }
+                }
+
+                if (action === 'return') {
+
+                    if (!confirm(
+                        'Czy potwierdzasz zwrot tej gry?'
+                    )) {
+                        return;
+                    }
+                }
+
+                button.disabled = true;
+
+                button.textContent =
+                    'Zapisywanie…';
+
+                pw152Ajax({
+                    action:
+                        'pw152_loan_action',
+
+                    loan:
+                        loan,
+
+                    loan_action:
+                        action,
+
+                    message:
+                        message
+                })
+                .then(function (result) {
+
+                    if (!result.success) {
+                        throw new Error(
+                            result.data ||
+                            'Nie udało się wykonać operacji.'
+                        );
+                    }
+
+                    window.location.reload();
+
+                })
+                .catch(function (error) {
+
+                    alert(error.message);
+
+                    button.disabled = false;
+                    button.textContent =
+                        action === 'approve'
+                            ? '✓ Zatwierdź'
+                            : action === 'reject'
+                                ? '✕ Odrzuć'
+                                : action === 'ask_return'
+                                    ? '↩ Poproś o zwrot'
+                                    : '✓ Potwierdź zwrot';
+                });
+
+            },
+            true
+        );
+
+
+        /* ========================================================
+         * ADMIN — WYŚLIJ ZWYKŁĄ WIADOMOŚĆ
+         * ======================================================== */
+
+        document.addEventListener(
+            'click',
+            function (e) {
+
+                const button =
+                    e.target.closest('button');
+
+                if (!button) {
+                    return;
+                }
+
+                if (
+                    button.textContent
+                        .trim()
+                        .indexOf('Wyślij') === -1
+                ) {
+                    return;
+                }
+
+                const container =
+                    button.closest(
+                        '.pw-card'
+                    ) ||
+                    button.parentElement.parentElement;
+
+                if (!container) {
+                    return;
+                }
+
+                const textarea =
+                    container.querySelector(
+                        'textarea'
+                    );
+
+                if (!textarea) {
+                    return;
+                }
+
+                /*
+                 * Nie przejmujemy innych przycisków „Wyślij”
+                 * poza panelem wypożyczeń.
+                 */
+                if (
+                    !container.querySelector(
+                        '.pw-admin-loan'
+                    )
+                ) {
+                    return;
+                }
+
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                const adminButton =
+                    container.querySelector(
+                        '.pw-admin-loan'
+                    );
+
+                const loan =
+                    adminButton
+                        ? parseInt(
+                            adminButton.getAttribute(
+                                'data-loan'
+                            ),
+                            10
+                        )
+                        : 0;
+
+                if (!loan) {
+                    alert(
+                        'Nie znaleziono wypożyczenia.'
+                    );
+                    return;
+                }
+
+                const message =
+                    textarea.value.trim();
+
+                if (!message) {
+                    alert(
+                        'Wpisz wiadomość.'
+                    );
+                    textarea.focus();
+                    return;
+                }
+
+                if (!confirm(
+                    'Czy wysłać tę wiadomość do gracza?'
+                )) {
+                    return;
+                }
+
+                button.disabled = true;
+                button.textContent =
+                    'Wysyłanie…';
+
+                pw152Ajax({
+                    action:
+                        'pw152_loan_message',
+
+                    loan:
+                        loan,
+
+                    message:
+                        message
+                })
+                .then(function (result) {
+
+                    if (!result.success) {
+                        throw new Error(
+                            result.data ||
+                            'Nie udało się wysłać wiadomości.'
+                        );
+                    }
+
+                    textarea.value = '';
+
+                    alert(
+                        '✓ Wiadomość została wysłana do gracza.'
+                    );
+
+                    button.disabled = false;
+                    button.textContent =
+                        '✉ Wyślij';
+
+                })
+                .catch(function (error) {
+
+                    alert(error.message);
+
+                    button.disabled = false;
+                    button.textContent =
+                        '✉ Wyślij';
+                });
+
+            },
+            true
+        );
+
+
+        /* ========================================================
+         * HISTORIA DLA ADMINISTRATORA
+         * ======================================================== */
+
+        function pw152FindLoanPanel() {
+
+            const firstButton =
+                document.querySelector(
+                    '.pw-admin-loan'
+                );
+
+            if (!firstButton) {
+                return null;
+            }
+
+            let node =
+                firstButton;
+
+            for (
+                let i = 0;
+                i < 8 && node;
+                i++
+            ) {
+
+                if (
+                    node.querySelector &&
+                    node.querySelector(
+                        '.pw-admin-loan'
+                    ) &&
+                    node.textContent
+                        .toUpperCase()
+                        .indexOf('WYPOŻYCZENIA') !== -1
+                ) {
+                    return node;
+                }
+
+                node =
+                    node.parentElement;
+            }
+
+            return (
+                firstButton.closest(
+                    '[data-pw-panel]'
+                ) ||
+                firstButton.parentElement
+            );
+        }
+
+
+        function pw152LoadHistory() {
+
+            if (
+                !window.PWGracz ||
+                !PWGracz.ajax
+            ) {
+                return;
+            }
+
+            pw152Ajax({
+                action:
+                    'pw152_loan_history'
+            })
+            .then(function (result) {
+
+                if (
+                    !result.success ||
+                    !result.data ||
+                    !result.data.html
+                ) {
+                    return;
+                }
+
+                const panel =
+                    pw152FindLoanPanel();
+
+                if (!panel) {
+                    return;
+                }
+
+                let history =
+                    document.querySelector(
+                        '#pw152-admin-loan-history'
+                    );
+
+                if (history) {
+                    history.remove();
+                }
+
+                panel.insertAdjacentHTML(
+                    'beforeend',
+                    result.data.html
+                );
+            });
+        }
+
+
+        document.addEventListener(
+            'DOMContentLoaded',
+            function () {
+
+                setTimeout(
+                    pw152LoadHistory,
+                    500
+                );
+
+                /*
+                 * Panel Gracza jest odświeżany AJAX-em,
+                 * więc próbujemy ponownie po zmianach DOM.
+                 */
+                const observer =
+                    new MutationObserver(
+                        function () {
+
+                            if (
+                                !document.querySelector(
+                                    '#pw152-admin-loan-history'
+                                )
+                            ) {
+                                setTimeout(
+                                    pw152LoadHistory,
+                                    300
+                                );
+                            }
+                        }
+                    );
+
+                observer.observe(
+                    document.body,
+                    {
+                        childList: true,
+                        subtree: true
+                    }
+                );
+            }
+        );
+
+    })();
+    </script>
+
+    <?php
+});
+
+/**
+ * Planszownia Gracz 1.5.2
+ * Stabilna obsługa przycisku „Wyślij” wiadomość.
+ */
+
+add_action('wp_footer', function () {
+
+    if (
+        !is_user_logged_in() ||
+        !current_user_can('manage_options')
+    ) {
+        return;
+    }
+
+    ?>
+    <script>
+    (function () {
+
+        document.addEventListener('click', function (e) {
+
+            const button = e.target.closest(
+                '.pw-loan-message-send, .pw-admin-loan-message'
+            );
+
+            if (!button) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            /*
+             * Szukamy karty konkretnego wypożyczenia.
+             */
+            const card =
+                button.closest(
+                    '.pw-loan-card, .pw-loan-item, .pw-admin-loan-card, .pw-card'
+                );
+
+            if (!card) {
+                alert('Nie znaleziono wypożyczenia.');
+                return;
+            }
+
+            /*
+             * ID wypożyczenia.
+             */
+            let loan = parseInt(
+                button.getAttribute('data-loan'),
+                10
+            );
+
+            if (!loan) {
+                const actionButton =
+                    card.querySelector(
+                        '.pw-admin-loan[data-loan]'
+                    );
+
+                if (actionButton) {
+                    loan = parseInt(
+                        actionButton.getAttribute('data-loan'),
+                        10
+                    );
+                }
+            }
+
+            if (!loan) {
+                alert(
+                    'Nie znaleziono numeru wypożyczenia.'
+                );
+                return;
+            }
+
+            /*
+             * Pole wiadomości.
+             */
+            const textarea =
+                card.querySelector('textarea');
+
+            if (!textarea) {
+                alert(
+                    'Nie znaleziono pola wiadomości.'
+                );
+                return;
+            }
+
+            const message =
+                textarea.value.trim();
+
+            if (!message) {
+                alert(
+                    'Wpisz wiadomość przed wysłaniem.'
+                );
+                textarea.focus();
+                return;
+            }
+
+            if (!confirm(
+                'Czy wysłać tę wiadomość do gracza?'
+            )) {
+                return;
+            }
+
+            const originalText =
+                button.textContent;
+
+            button.disabled = true;
+            button.textContent =
+                'Wysyłanie…';
+
+
+            /*
+             * Korzystamy z istniejącego,
+             * sprawdzonego AJAX-a 1.5.2:
+             *
+             * pw_loan_message
+             */
+            const data =
+                new URLSearchParams();
+
+            data.append(
+                'action',
+                'pw_loan_message'
+            );
+
+            data.append(
+                'loan',
+                loan
+            );
+
+            data.append(
+                'message',
+                message
+            );
+
+            data.append(
+                'nonce',
+                window.PWGracz
+                    ? PWGracz.nonce
+                    : ''
+            );
+
+
+            const ajaxUrl =
+                window.PWGracz &&
+                PWGracz.ajax
+                    ? PWGracz.ajax
+                    : '<?php echo esc_url(admin_url('admin-ajax.php')); ?>';
+
+
+            fetch(
+                ajaxUrl,
+                {
+                    method: 'POST',
+
+                    headers: {
+                        'Content-Type':
+                            'application/x-www-form-urlencoded; charset=UTF-8'
+                    },
+
+                    body:
+                        data.toString()
+                }
+            )
+            .then(function (response) {
+
+                /*
+                 * Najpierw pobieramy tekst.
+                 *
+                 * Dzięki temu nie dostaniemy ponownie
+                 * błędu „Unexpected token <”.
+                 */
+                return response.text();
+
+            })
+            .then(function (text) {
+
+                let result;
+
+                try {
+                    result = JSON.parse(text);
+
+                } catch (error) {
+
+                    console.error(
+                        'Planszownia Gracz — odpowiedź serwera:',
+                        text
+                    );
+
+                    throw new Error(
+                        'Serwer zwrócił nieprawidłową odpowiedź. Wiadomość nie została wysłana.'
+                    );
+                }
+
+                if (!result.success) {
+
+                    throw new Error(
+                        result.data ||
+                        'Nie udało się wysłać wiadomości.'
+                    );
+                }
+
+                /*
+                 * Wyczyść pole.
+                 */
+                textarea.value = '';
+
+                alert(
+                    result.data &&
+                    result.data.message
+                        ? result.data.message
+                        : '✓ Wiadomość została wysłana do gracza.'
+                );
+
+                button.disabled = false;
+                button.textContent =
+                    originalText;
+
+            })
+            .catch(function (error) {
+
+                alert(
+                    error.message ||
+                    'Wystąpił błąd podczas wysyłania wiadomości.'
+                );
+
+                button.disabled = false;
+                button.textContent =
+                    originalText;
+            });
+
+        }, true);
+
+    })();
+    </script>
+    <?php
+});
+/**
+ * Planszownia Gracz 1.5.2
+ * Stabilna obsługa odrzucenia wypożyczenia.
+ */
+
+add_action('wp_ajax_pw152_reject_loan', function () {
+
+    if (
+        !is_user_logged_in() ||
+        !current_user_can('manage_options')
+    ) {
+        wp_send_json_error(
+            'Brak uprawnień.'
+        );
+    }
+
+    if (
+        empty($_POST['nonce']) ||
+        !wp_verify_nonce(
+            sanitize_text_field(
+                wp_unslash($_POST['nonce'])
+            ),
+            'pw_gracz'
+        )
+    ) {
+        wp_send_json_error(
+            'Błąd zabezpieczenia.'
+        );
+    }
+
+    global $wpdb;
+
+    $loan_id = absint(
+        $_POST['loan'] ?? 0
+    );
+
+    $message = sanitize_textarea_field(
+        wp_unslash(
+            $_POST['message'] ?? ''
+        )
+    );
+
+    if (!$loan_id) {
+        wp_send_json_error(
+            'Nie znaleziono wypożyczenia.'
+        );
+    }
+
+    $loans_table =
+        $wpdb->prefix . 'pw_loans';
+
+    $loan = $wpdb->get_row(
+        $wpdb->prepare(
+            "
+            SELECT *
+            FROM {$loans_table}
+            WHERE id = %d
+            LIMIT 1
+            ",
+            $loan_id
+        )
+    );
+
+    if (!$loan) {
+        wp_send_json_error(
+            'Wypożyczenie nie istnieje.'
+        );
+    }
+
+    if ($loan->status !== 'requested') {
+        wp_send_json_error(
+            'Ta prośba nie oczekuje już na decyzję.'
+        );
+    }
+
+    /*
+     * Najpierw zmieniamy status.
+     */
+    $updated = $wpdb->update(
+        $loans_table,
+        array(
+            'status' => 'rejected',
+            'decision_note' => $message,
+        ),
+        array(
+            'id' => $loan_id,
+        ),
+        array(
+            '%s',
+            '%s',
+        ),
+        array(
+            '%d',
+        )
+    );
+
+    if ($updated === false) {
+        wp_send_json_error(
+            'Nie udało się zapisać odrzucenia.'
+        );
+    }
+
+    /*
+     * Wiadomość zapisujemy do historii,
+     * ale tylko jeżeli administrator coś wpisał.
+     */
+    if ($message !== '') {
+
+        if (
+            function_exists(
+                'pw152_loan_history_add'
+            )
+        ) {
+
+            pw152_loan_history_add(
+                $loan_id,
+                $message,
+                'rejection'
+            );
+        }
+    }
+
+    wp_send_json_success(
+        array(
+            'message' =>
+                'Prośba została odrzucona.',
+        )
+    );
+});
+
+
+/*
+ * Przycisk ODRZUĆ
+ */
+add_action('wp_footer', function () {
+
+    if (
+        !is_user_logged_in() ||
+        !current_user_can('manage_options')
+    ) {
+        return;
+    }
+
+    ?>
+
+    <script>
+    (function () {
+
+        document.addEventListener(
+            'click',
+            function (e) {
+
+                const button =
+                    e.target.closest(
+                        '.pw-admin-loan[data-do="reject"]'
+                    );
+
+                if (!button) {
+                    return;
+                }
+
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                const loan =
+                    parseInt(
+                        button.getAttribute(
+                            'data-loan'
+                        ),
+                        10
+                    );
+
+                if (!loan) {
+                    alert(
+                        'Nie znaleziono wypożyczenia.'
+                    );
+                    return;
+                }
+
+                const message =
+                    window.prompt(
+                        'Wiadomość / powód odmowy dla gracza (opcjonalnie):',
+                        ''
+                    );
+
+                if (message === null) {
+                    return;
+                }
+
+                if (!confirm(
+                    'Czy na pewno odrzucić tę prośbę?'
+                )) {
+                    return;
+                }
+
+                const original =
+                    button.textContent;
+
+                button.disabled = true;
+                button.textContent =
+                    'Odrzucanie…';
+
+                const data =
+                    new URLSearchParams();
+
+                data.append(
+                    'action',
+                    'pw152_reject_loan'
+                );
+
+                data.append(
+                    'loan',
+                    loan
+                );
+
+                data.append(
+                    'message',
+                    message
+                );
+
+                data.append(
+                    'nonce',
+                    window.PWGracz
+                        ? PWGracz.nonce
+                        : ''
+                );
+
+                const ajaxUrl =
+                    window.PWGracz &&
+                    PWGracz.ajax
+                        ? PWGracz.ajax
+                        : '<?php echo esc_url(admin_url('admin-ajax.php')); ?>';
+
+                fetch(
+                    ajaxUrl,
+                    {
+                        method: 'POST',
+
+                        headers: {
+                            'Content-Type':
+                                'application/x-www-form-urlencoded; charset=UTF-8'
+                        },
+
+                        body:
+                            data.toString()
+                    }
+                )
+                .then(function (response) {
+
+                    return response.text();
+
+                })
+                .then(function (text) {
+
+                    let result;
+
+                    try {
+                        result =
+                            JSON.parse(text);
+
+                    } catch (error) {
+
+                        console.error(
+                            'Odpowiedź serwera przy odrzuceniu:',
+                            text
+                        );
+
+                        throw new Error(
+                            'Serwer zwrócił błąd przy odrzucaniu prośby.'
+                        );
+                    }
+
+                    if (!result.success) {
+
+                        throw new Error(
+                            result.data ||
+                            'Nie udało się odrzucić prośby.'
+                        );
+                    }
+
+                    alert(
+                        result.data &&
+                        result.data.message
+                            ? result.data.message
+                            : 'Prośba została odrzucona.'
+                    );
+
+                    /*
+                     * Odświeżamy panel administratora.
+                     */
+                    window.location.reload();
+
+                })
+                .catch(function (error) {
+
+                    alert(
+                        error.message ||
+                        'Wystąpił błąd.'
+                    );
+
+                    button.disabled = false;
+                    button.textContent =
+                        original;
+                });
+
+            },
+            true
+        );
+
+    })();
+    </script>
+
+    <?php
+});
+
+/**
+ * Planszownia Gracz 1.5.2
+ * Historia wiadomości administratora przy aktywnych wypożyczeniach.
+ */
+
+add_action('wp_ajax_pw152_admin_loan_messages', function () {
+
+    if (
+        !is_user_logged_in() ||
+        !current_user_can('manage_options')
+    ) {
+        wp_send_json_error('Brak uprawnień.');
+    }
+
+    if (
+        empty($_POST['nonce']) ||
+        !wp_verify_nonce(
+            sanitize_text_field(
+                wp_unslash($_POST['nonce'])
+            ),
+            'pw_gracz'
+        )
+    ) {
+        wp_send_json_error('Błąd zabezpieczenia.');
+    }
+
+    global $wpdb;
+
+    $loan_id = absint($_POST['loan'] ?? 0);
+
+    if (!$loan_id) {
+        wp_send_json_error('Brak numeru wypożyczenia.');
+    }
+
+    $loans_table =
+        $wpdb->prefix . 'pw_loans';
+
+    $messages_table =
+        $wpdb->prefix . 'pw_loan_messages';
+
+    $users_table =
+        $wpdb->users;
+
+    $games_table =
+        $wpdb->prefix . 'pw_games';
+
+
+    /*
+     * Pobieramy konkretne wypożyczenie.
+     */
+    $loan = $wpdb->get_row(
+        $wpdb->prepare(
+            "
+            SELECT
+                l.*,
+                g.title AS game_title,
+                u.display_name AS player_name
+            FROM {$loans_table} l
+            LEFT JOIN {$games_table} g
+                ON g.id = l.game_id
+            LEFT JOIN {$users_table} u
+                ON u.ID = l.user_id
+            WHERE l.id = %d
+            LIMIT 1
+            ",
+            $loan_id
+        )
+    );
+
+    if (!$loan) {
+        wp_send_json_error(
+            'Nie znaleziono wypożyczenia.'
+        );
+    }
+
+
+    /*
+     * Pobieramy CAŁĄ historię wiadomości.
+     */
+    $messages = $wpdb->get_results(
+        $wpdb->prepare(
+            "
+            SELECT *
+            FROM {$messages_table}
+            WHERE loan_id = %d
+            ORDER BY created_at ASC, id ASC
+            ",
+            $loan_id
+        )
+    );
+
+
+    ob_start();
+
+    ?>
+
+    <div
+        class="pw152-admin-message-history"
+        data-loan="<?php echo (int) $loan_id; ?>"
+        style="
+            margin-top:12px;
+            padding-top:10px;
+            border-top:1px solid rgba(0,0,0,.08);
+        "
+    >
+
+        <strong>
+            💬 Historia wiadomości
+        </strong>
+
+        <?php if (empty($messages)) : ?>
+
+            <div
+                style="
+                    margin-top:7px;
+                    font-size:13px;
+                    opacity:.6;
+                "
+            >
+                Brak wysłanych wiadomości.
+            </div>
+
+        <?php else : ?>
+
+            <?php foreach ($messages as $msg) : ?>
+
+                <div
+                    style="
+                        margin-top:8px;
+                        padding:9px 11px;
+                        background:#f7f7f7;
+                        border-radius:8px;
+                    "
+                >
+
+                    <div
+                        style="
+                            font-size:11px;
+                            opacity:.6;
+                            margin-bottom:4px;
+                        "
+                    >
+
+                        <?php
+                        echo esc_html(
+                            mysql2date(
+                                'd.m.Y H:i',
+                                $msg->created_at
+                            )
+                        );
+                        ?>
+
+                    </div>
+
+                    <div>
+                        <?php
+                        echo nl2br(
+                            esc_html(
+                                $msg->message
+                            )
+                        );
+                        ?>
+                    </div>
+
+                </div>
+
+            <?php endforeach; ?>
+
+        <?php endif; ?>
+
+    </div>
+
+    <?php
+
+    wp_send_json_success(
+        array(
+            'html' =>
+                ob_get_clean()
+        )
+    );
+});
+
+
+/*
+ * AJAX pobierający listę aktywnych wypożyczeń
+ * razem z historią wiadomości.
+ */
+add_action('wp_ajax_pw152_admin_all_loan_messages', function () {
+
+    if (
+        !is_user_logged_in() ||
+        !current_user_can('manage_options')
+    ) {
+        wp_send_json_error('Brak uprawnień.');
+    }
+
+    if (
+        empty($_POST['nonce']) ||
+        !wp_verify_nonce(
+            sanitize_text_field(
+                wp_unslash($_POST['nonce'])
+            ),
+            'pw_gracz'
+        )
+    ) {
+        wp_send_json_error('Błąd zabezpieczenia.');
+    }
+
+    global $wpdb;
+
+    $loans_table =
+        $wpdb->prefix . 'pw_loans';
+
+    $messages_table =
+        $wpdb->prefix . 'pw_loan_messages';
+
+    $rows = $wpdb->get_results(
+        "
+        SELECT
+            l.id,
+            l.status
+        FROM {$loans_table} l
+        WHERE l.status IN (
+            'requested',
+            'borrowed',
+            'return_requested'
+        )
+        ORDER BY l.id DESC
+        "
+    );
+
+    $output = array();
+
+    foreach ($rows as $loan) {
+
+        $messages = $wpdb->get_results(
+            $wpdb->prepare(
+                "
+                SELECT
+                    message,
+                    created_at
+                FROM {$messages_table}
+                WHERE loan_id = %d
+                ORDER BY created_at ASC, id ASC
+                ",
+                $loan->id
+            )
+        );
+
+        $html = '';
+
+        if (!empty($messages)) {
+
+            $html .= '
+                <div
+                    class="pw152-admin-message-history"
+                    data-loan="' . (int) $loan->id . '"
+                    style="
+                        margin-top:12px;
+                        padding-top:10px;
+                        border-top:1px solid rgba(0,0,0,.08);
+                    "
+                >
+                    <strong>
+                        💬 Historia wiadomości
+                    </strong>
+            ';
+
+            foreach ($messages as $msg) {
+
+                $html .= '
+                    <div
+                        style="
+                            margin-top:8px;
+                            padding:9px 11px;
+                            background:#f7f7f7;
+                            border-radius:8px;
+                        "
+                    >
+                        <div
+                            style="
+                                font-size:11px;
+                                opacity:.6;
+                                margin-bottom:4px;
+                            "
+                        >' .
+                        esc_html(
+                            mysql2date(
+                                'd.m.Y H:i',
+                                $msg->created_at
+                            )
+                        ) .
+                        '</div>
+                        <div>' .
+                        nl2br(
+                            esc_html(
+                                $msg->message
+                            )
+                        ) .
+                        '</div>
+                    </div>
+                ';
+            }
+
+            $html .= '</div>';
+        }
+
+        $output[(int) $loan->id] =
+            $html;
+    }
+
+    wp_send_json_success(
+        array(
+            'loans' => $output
+        )
+    );
+});
+
+
+/*
+ * Dodanie historii do aktualnych kart wypożyczeń.
+ */
+add_action('wp_footer', function () {
+
+    if (
+        !is_user_logged_in() ||
+        !current_user_can('manage_options')
+    ) {
+        return;
+    }
+
+    ?>
+
+    <script>
+    (function () {
+
+        function pw152AdminMessageHistory() {
+
+            if (
+                !window.PWGracz ||
+                !PWGracz.ajax ||
+                !PWGracz.nonce
+            ) {
+                return;
+            }
+
+            const data =
+                new URLSearchParams();
+
+            data.append(
+                'action',
+                'pw152_admin_all_loan_messages'
+            );
+
+            data.append(
+                'nonce',
+                PWGracz.nonce
+            );
+
+            fetch(
+                PWGracz.ajax,
+                {
+                    method: 'POST',
+
+                    headers: {
+                        'Content-Type':
+                            'application/x-www-form-urlencoded; charset=UTF-8'
+                    },
+
+                    body:
+                        data.toString()
+                }
+            )
+            .then(function (response) {
+                return response.json();
+            })
+            .then(function (result) {
+
+                if (
+                    !result ||
+                    !result.success ||
+                    !result.data ||
+                    !result.data.loans
+                ) {
+                    return;
+                }
+
+                /*
+                 * Każdy przycisk admina ma data-loan.
+                 * Szukamy karty konkretnego wypożyczenia.
+                 */
+                document
+                    .querySelectorAll(
+                        '.pw-admin-loan[data-loan]'
+                    )
+                    .forEach(function (button) {
+
+                        const loan =
+                            parseInt(
+                                button.getAttribute(
+                                    'data-loan'
+                                ),
+                                10
+                            );
+
+                        if (!loan) {
+                            return;
+                        }
+
+                        const html =
+                            result.data.loans[loan];
+
+                        if (!html) {
+                            return;
+                        }
+
+                        /*
+                         * Znajdź najbliższą kartę.
+                         */
+                        let card =
+                            button.closest(
+                                '.pw-card'
+                            );
+
+                        if (!card) {
+                            return;
+                        }
+
+                        /*
+                         * Nie dodawaj historii drugi raz.
+                         */
+                        if (
+                            card.querySelector(
+                                '.pw152-admin-message-history'
+                            )
+                        ) {
+                            return;
+                        }
+
+                        card.insertAdjacentHTML(
+                            'beforeend',
+                            html
+                        );
+                    });
+
+            })
+            .catch(function () {});
+        }
+
+
+        document.addEventListener(
+            'DOMContentLoaded',
+            function () {
+
+                setTimeout(
+                    pw152AdminMessageHistory,
+                    700
+                );
+
+            }
+        );
+
+
+        /*
+         * Panel wypożyczeń odświeża się automatycznie,
+         * więc sprawdzamy również co kilka sekund.
+         */
+        setInterval(
+            pw152AdminMessageHistory,
+            5000
+        );
+
+
+        /*
+         * Po AJAX-owym odświeżeniu panelu
+         * ponownie dodajemy historię.
+         */
+        const observer =
+            new MutationObserver(
+                function () {
+
+                    if (
+                        document.querySelector(
+                            '.pw-admin-loan[data-loan]'
+                        )
+                    ) {
+
+                        setTimeout(
+                            pw152AdminMessageHistory,
+                            300
+                        );
+                    }
+
+                }
+            );
+
+
+        observer.observe(
+            document.body,
+            {
+                childList: true,
+                subtree: true
+            }
+        );
+
+    })();
+    </script>
+
+    <?php
+});
+
+<?php
